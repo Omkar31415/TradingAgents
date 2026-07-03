@@ -134,6 +134,18 @@ class TradeItem(BaseModel):
     executed_at: datetime
 
 
+class ScreenerResultItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    run_date: str
+    symbol: str
+    market: str
+    score: float
+    summary: str
+    added: bool
+    created_at: datetime
+
+
 class HealthResponse(BaseModel):
     status: str
     scheduler_running: bool

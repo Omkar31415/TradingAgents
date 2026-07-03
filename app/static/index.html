@@ -263,6 +263,17 @@
   </section>
 
   <section>
+    <h2>Anomaly screener <span class="sub">— daily hunt for under-followed strength (revenue growth + momentum + insider buying vs. low attention); top picks join the watchlist automatically</span></h2>
+    <div class="addrow">
+      <button class="btn primary" id="screenerRun">🔎 Run screener now</button>
+      <span class="tier" style="align-self:center">runs Mon–Fri 6:00 AM automatically · no LLM cost</span>
+    </div>
+    <table class="data"><thead><tr>
+      <th>Date</th><th>Symbol</th><th>Market</th><th>Score</th><th>Why</th><th>Added</th>
+    </tr></thead><tbody id="screenerBody"></tbody></table>
+  </section>
+
+  <section>
     <h2>Run history</h2>
     <table class="data"><thead><tr>
       <th>When</th><th>Symbol</th><th>Rating</th><th>Change</th><th>Status</th><th>Duration</th>
@@ -670,6 +681,29 @@ async function loadTrades() {
     : `<tr><td colspan="7" class="empty">No trades yet.</td></tr>`;
 }
 
+/* ---------- screener ---------- */
+async function loadScreener() {
+  let rows;
+  try { rows = await api("/screener"); } catch { return; }
+  $("screenerBody").innerHTML = rows.length ? rows.map(r => `
+    <tr>
+      <td class="tier">${esc(r.run_date)}</td>
+      <td><b>${esc(r.symbol)}</b></td>
+      <td class="tier">${esc(r.market.toUpperCase())}</td>
+      <td class="num"><b>${r.score.toFixed(0)}</b></td>
+      <td class="tier">${esc(r.summary)}</td>
+      <td>${r.added ? `<span class="changed">✓ watchlist</span>` : ""}</td>
+    </tr>`).join("")
+    : `<tr><td colspan="6" class="empty">No screener runs yet — it fires each weekday morning, or run it now.</td></tr>`;
+}
+$("screenerRun").addEventListener("click", async () => {
+  try {
+    await api("/screener/run", { method: "POST" });
+    toast("Screener running — results appear here in a minute or two");
+    setTimeout(() => { loadScreener(); loadWatchlist(); }, 90000);
+  } catch (e) { toast(e.message); }
+});
+
 /* ---------- signals ---------- */
 async function loadSignals() {
   const sigs = await api("/signals?limit=30");
@@ -686,7 +720,7 @@ async function loadSignals() {
 
 /* ---------- boot + refresh ---------- */
 async function refresh() {
-  await Promise.allSettled([loadHealth(), loadWatchlist(), loadSignals(), loadPortfolio(), loadTrades()]);
+  await Promise.allSettled([loadHealth(), loadWatchlist(), loadSignals(), loadPortfolio(), loadTrades(), loadScreener()]);
 }
 loadSlots();
 refresh();

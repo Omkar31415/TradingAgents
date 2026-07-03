@@ -38,6 +38,14 @@ class AssistantSettings(BaseSettings):
     assistant_quick_model: str = "claude-haiku-4-5"
     assistant_llm_backend_url: str = ""  # empty = provider's default endpoint
 
+    # --- Anomaly screener ---
+    # Daily quantitative discovery pass (no LLM cost). Auto-adds up to
+    # ``screener_max_adds`` high-scoring under-followed candidates per run,
+    # never growing the watchlist past ``screener_watchlist_cap``.
+    screener_enabled: bool = True
+    screener_max_adds: int = Field(default=2, ge=0, le=10)
+    screener_watchlist_cap: int = Field(default=25, ge=1)
+
     # --- Paper portfolio ---
     # Virtual starting cash (USD) for the automatic paper broker. Changing it
     # later does not reset an existing account.

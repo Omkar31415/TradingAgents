@@ -15,11 +15,13 @@ import pytz
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+from app.core.config import get_settings
 from app.domain import Market
 from app.models.base import session_factory
 from app.repositories.schedule import ScheduleRepository
 from app.services.paper_broker import check_stops
 from app.services.pipeline import run_slot
+from app.services.screener import run_screener
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +52,19 @@ def build_scheduler() -> AsyncIOScheduler:
         coalesce=True,
         max_instances=1,
     )
+    # Daily anomaly-screener pass before the US pre-market slot. Pure data
+    # APIs — no LLM cost, exempt from the run budget.
+    if get_settings().screener_enabled:
+        scheduler.add_job(
+            run_screener,
+            CronTrigger(day_of_week="mon-fri", hour=6, minute=0,
+                        timezone=pytz.timezone("America/Chicago")),
+            id="screener",
+            name="anomaly screener",
+            coalesce=True,
+            max_instances=1,
+            misfire_grace_time=3600,
+        )
     return scheduler
 
 

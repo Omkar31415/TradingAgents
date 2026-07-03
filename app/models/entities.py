@@ -116,6 +116,22 @@ class Trade(Base):
     )
 
 
+class ScreenerResult(Base):
+    """One scored candidate from a screener run (kept for the dashboard/audit)."""
+
+    __tablename__ = "screener_results"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    run_date: Mapped[str] = mapped_column(String(10), index=True)
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    market: Mapped[str] = mapped_column(String(16))
+    score: Mapped[float] = mapped_column(Float)
+    summary: Mapped[str] = mapped_column(Text, default="")
+    metrics_json: Mapped[str] = mapped_column(Text, default="{}")
+    added: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
 class SignalRecord(Base):
     __tablename__ = "signals"
 

@@ -21,7 +21,7 @@ from fastapi.responses import FileResponse
 # .env must be loaded before anything reads provider keys or settings.
 load_dotenv()
 
-from app.api import portfolio, runs, schedule, tickers, watchlist  # noqa: E402
+from app.api import portfolio, runs, schedule, screener, tickers, watchlist  # noqa: E402
 from app.api.schemas import HealthResponse  # noqa: E402
 from app.core.config import get_settings  # noqa: E402
 from app.core.logging import configure_logging  # noqa: E402
@@ -98,6 +98,7 @@ app.include_router(runs.router)
 app.include_router(schedule.router)
 app.include_router(tickers.router)
 app.include_router(portfolio.router)
+app.include_router(screener.router)
 
 
 @app.get("/", include_in_schema=False)
