@@ -72,7 +72,7 @@ class AssistantSettings(BaseSettings):
     # This global cap is the safety net: no matter how slots are configured,
     # at most this many ticker-runs happen per UTC day — protects a limited
     # LLM quota (e.g. Ollama cloud free tier) from a misconfigured schedule.
-    assistant_daily_run_budget: int = Field(default=4, ge=1)
+    assistant_daily_run_budget: int = Field(default=5, ge=1)
     # Weekly governor on top of the daily one: with Ollama cloud free tier a
     # deep run costs ~8-9% of the weekly allowance, so ~11 runs/week is the
     # sustainable ceiling. A violent Monday can't starve Friday.
