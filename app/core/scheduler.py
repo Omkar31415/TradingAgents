@@ -27,7 +27,9 @@ logger = logging.getLogger(__name__)
 
 _SLOT_JOB_PREFIX = "slot_"
 _MONITOR_JOB_ID = "stop_monitor"
-_MONITOR_INTERVAL_MINUTES = 30
+# Positions are watched every 5 minutes (the reflex layer guards money at
+# risk; with 2-check confirmation that means ~10 minutes to a reflex action).
+_MONITOR_INTERVAL_MINUTES = 5
 
 
 def parse_hhmm(value: str) -> tuple[int, int]:

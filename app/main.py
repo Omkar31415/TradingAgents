@@ -27,7 +27,6 @@ from app.core.config import get_settings  # noqa: E402
 from app.core.logging import configure_logging  # noqa: E402
 from app.core.scheduler import build_scheduler, sync_slot_jobs  # noqa: E402
 from app.models.base import init_db, session_factory  # noqa: E402
-from app.services.pipeline import runs_remaining_today  # noqa: E402
 from app.services.seed import (  # noqa: E402
     seed_paper_account_if_missing,
     seed_schedule_if_empty,
@@ -118,7 +117,14 @@ async def health() -> HealthResponse:
         }
         for job in scheduler.get_jobs()
     ]
-    remaining = await runs_remaining_today()
+    from app.models.base import session_factory as _sf
+    from app.repositories.signals import SignalRepository as _SigRepo
+    from app.services.pipeline import _utc_midnight, _utc_week_start
+
+    async with _sf()() as session:
+        signals = _SigRepo(session)
+        used_today = await signals.count_since(_utc_midnight())
+        used_week = await signals.count_since(_utc_week_start())
     return HealthResponse(
         status="ok",
         scheduler_running=scheduler.running,
@@ -128,6 +134,8 @@ async def health() -> HealthResponse:
         llm_provider=settings.assistant_llm_provider,
         deep_model=settings.assistant_deep_model,
         quick_model=settings.assistant_quick_model,
-        runs_today=settings.assistant_daily_run_budget - remaining,
+        runs_today=used_today,
         daily_run_budget=settings.assistant_daily_run_budget,
+        runs_this_week=used_week,
+        weekly_run_budget=settings.assistant_weekly_run_budget,
     )

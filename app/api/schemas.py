@@ -1,12 +1,22 @@
 """Request/response schemas for the assistant API."""
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
 class AddTickerRequest(BaseModel):
     symbol: str = Field(min_length=1, max_length=32, description="Yahoo Finance symbol, e.g. NVDA, RELIANCE.NS, BTC-USD")
+
+
+class UpdateTickerRequest(BaseModel):
+    tier: Literal["daily", "weekly", "paused"] = Field(
+        description=(
+            "Coverage cadence: daily (every slot), weekly (Monday check-in + "
+            "event trigger on big moves), paused (never analyzed)"
+        )
+    )
 
 
 class WatchlistItem(BaseModel):
@@ -17,9 +27,11 @@ class WatchlistItem(BaseModel):
     asset_type: str
     tier: str
     added_by: str
+    category: str
     consecutive_holds: int
     last_rating: str | None
     last_run_at: datetime | None
+    next_review_at: datetime | None
     note: str | None
 
 
@@ -178,3 +190,5 @@ class HealthResponse(BaseModel):
     quick_model: str
     runs_today: int
     daily_run_budget: int
+    runs_this_week: int
+    weekly_run_budget: int

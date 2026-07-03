@@ -5,7 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.schemas import AddTickerRequest, WatchlistItem
+from app.api.schemas import AddTickerRequest, UpdateTickerRequest, WatchlistItem
 from app.domain import Tier
 from app.models.base import get_session
 from app.repositories.watchlist import WatchlistRepository
@@ -42,6 +42,14 @@ async def remove_ticker(symbol: str, session: SessionDep) -> None:
             status_code=status.HTTP_404_NOT_FOUND, detail=f"{symbol.upper()} not on watchlist"
         )
     await repo.remove(ticker)
+
+
+@router.patch("/{symbol}", response_model=WatchlistItem)
+async def update_ticker(
+    symbol: str, body: UpdateTickerRequest, session: SessionDep
+) -> WatchlistItem:
+    """Set a ticker's coverage cadence (daily / weekly / paused)."""
+    return await _set_tier(symbol, Tier(body.tier), session)
 
 
 @router.post("/{symbol}/pause", response_model=WatchlistItem)

@@ -35,17 +35,35 @@ def session_factory() -> async_sessionmaker[AsyncSession]:
     return _session_factory
 
 
-async def init_db() -> None:
-    """Create tables on first startup.
+# Columns added after a table already shipped: create_all() cannot ALTER, so
+# these are applied additively at startup. SQLite ADD COLUMN is cheap and
+# idempotence comes from checking PRAGMA table_info first.
+_COLUMN_MIGRATIONS = [
+    ("watchlist", "category", "VARCHAR(16) DEFAULT 'satellite'"),
+    ("watchlist", "next_review_at", "DATETIME"),
+]
 
-    Phase 1 pragmatism: schema is young and SQLite-local, so ``create_all``
-    is enough. Switch to Alembic before the Phase 2 schema additions
-    (paper-trading tables) so real data survives migrations.
+
+def _apply_column_migrations(conn) -> None:
+    for table, column, ddl in _COLUMN_MIGRATIONS:
+        existing = {
+            row[1] for row in conn.exec_driver_sql(f"PRAGMA table_info({table})")
+        }
+        if existing and column not in existing:
+            conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+
+
+async def init_db() -> None:
+    """Create tables on first startup and apply additive column migrations.
+
+    Pragmatism for a local SQLite app: ``create_all`` plus explicit ADD COLUMN
+    statements. Revisit Alembic if this ever moves to a shared database.
     """
     from app.models import entities  # noqa: F401 — register mappings
 
     async with get_engine().begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(_apply_column_migrations)
 
 
 async def get_session() -> AsyncIterator[AsyncSession]:

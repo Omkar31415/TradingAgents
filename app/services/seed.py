@@ -20,12 +20,14 @@ from app.repositories.watchlist import WatchlistRepository
 logger = logging.getLogger(__name__)
 
 SEED_SYMBOLS = [
-    # US
+    # US leaders
     "NVDA", "MSFT", "AMZN", "LLY", "JPM",
-    # India (NSE)
+    # India leaders (NSE)
     "RELIANCE.NS", "HDFCBANK.NS", "INFY.NS", "BHARTIARTL.NS",
-    # Crypto
+    # Crypto majors
     "BTC-USD", "ETH-USD",
+    # Index / commodity ballast (ETFs)
+    "SPY", "NIFTYBEES.NS", "GLD", "SLV",
 ]
 
 # Default analysis windows (user-editable in the dashboard; more can be added

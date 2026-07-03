@@ -36,23 +36,23 @@ class TestCurrency:
 
 
 class TestBuyQuantity:
-    def test_buy_is_ten_percent_of_equity(self):
+    def test_core_buy_is_ten_percent_of_equity(self):
         # $10,000 equity, $10,000 cash, $100 stock -> $1,000 -> 10 shares
-        assert buy_quantity("Buy", 10_000, 10_000, 100.0, 1.0) == pytest.approx(10.0)
+        assert buy_quantity("Buy", 10_000, 10_000, 100.0, 1.0, category="core") == pytest.approx(10.0)
 
-    def test_overweight_is_half_position(self):
-        assert buy_quantity("Overweight", 10_000, 10_000, 100.0, 1.0) == pytest.approx(5.0)
+    def test_core_overweight_is_half_position(self):
+        assert buy_quantity("Overweight", 10_000, 10_000, 100.0, 1.0, category="core") == pytest.approx(5.0)
 
     def test_capped_by_available_cash(self):
         # Only $300 cash left: order shrinks to what cash covers
-        assert buy_quantity("Buy", 10_000, 300, 100.0, 1.0) == pytest.approx(3.0)
+        assert buy_quantity("Buy", 10_000, 300, 100.0, 1.0, category="core") == pytest.approx(3.0)
 
     def test_dust_orders_are_skipped(self):
-        assert buy_quantity("Buy", 10_000, 20, 100.0, 1.0) == 0.0
+        assert buy_quantity("Buy", 10_000, 20, 100.0, 1.0, category="core") == 0.0
 
     def test_inr_conversion(self):
-        # $1,000 allocation at 83 INR/USD and a 2,490 INR stock
-        quantity = buy_quantity("Buy", 10_000, 10_000, 2_490.0, 83.0)
+        # $1,000 core allocation at 83 INR/USD and a 2,490 INR stock
+        quantity = buy_quantity("Buy", 10_000, 10_000, 2_490.0, 83.0, category="core")
         assert quantity == pytest.approx((1_000 * 83) / 2_490)
 
     def test_hold_and_unknown_ratings_buy_nothing(self):

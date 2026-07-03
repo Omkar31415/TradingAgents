@@ -18,7 +18,7 @@ overwhelmingly manipulation-driven; the watchlist's majors stay curated.
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from app.core.config import get_settings
 from app.domain import Market, infer_market
@@ -43,23 +43,27 @@ _US_SCREENS = (
     "aggressive_small_caps",
 )
 _PER_SCREEN = 25
-_MAX_ENRICHED = 30  # cap enrichment API volume per run
+# Enrichment slots are reserved per market so US candidates (collected first,
+# in bulk) can't crowd Indian ones out of the scoring entirely.
+_MAX_ENRICHED_US = 20
+_MAX_ENRICHED_INDIA = 10
 
 
-def _collect_candidates_sync() -> list[str]:
-    """Symbols from Yahoo screens, deduped, NSE preferred over BSE duplicates."""
+def _collect_candidates_sync() -> tuple[list[str], list[str]]:
+    """(us_symbols, india_symbols) from Yahoo screens, deduped, NSE preferred."""
     import yfinance as yf
 
-    symbols: list[str] = []
+    us: list[str] = []
     for screen in _US_SCREENS:
         try:
             for quote in yf.screen(screen, count=_PER_SCREEN).get("quotes", []):
                 symbol = quote.get("symbol")
                 if symbol:
-                    symbols.append(symbol)
+                    us.append(symbol)
         except Exception as exc:
             logger.warning("Screen %r failed: %s", screen, exc)
 
+    india: list[str] = []
     try:
         from yfinance import EquityQuery
 
@@ -72,13 +76,15 @@ def _collect_candidates_sync() -> list[str]:
         for quote in result.get("quotes", []):
             symbol = quote.get("symbol", "")
             if symbol.endswith(".NS"):  # skip .BO duplicates of the same company
-                symbols.append(symbol)
+                india.append(symbol)
     except Exception as exc:
         logger.warning("India screen failed: %s", exc)
 
-    seen: set[str] = set()
-    unique = [s for s in symbols if not (s in seen or seen.add(s))]
-    return unique
+    def dedupe(items: list[str]) -> list[str]:
+        seen: set[str] = set()
+        return [s for s in items if not (s in seen or seen.add(s))]
+
+    return dedupe(us), dedupe(india)
 
 
 def _insider_net_shares_sync(ticker) -> float | None:
@@ -164,20 +170,66 @@ def _enrich_sync(symbol: str) -> CandidateMetrics:
     )
 
 
+async def expire_stale_picks() -> list[str]:
+    """Drop screener picks that stayed boring past the expiry window.
+
+    Only satellites the screener added, sitting at weekly tier with a Hold (or
+    no actionable) rating and — the hard rule — NO open position, ever leave
+    this way. The screener can always re-discover them if their numbers turn.
+    """
+    from app.repositories.portfolio import PortfolioRepository
+
+    settings = get_settings()
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
+        days=settings.screener_expiry_days
+    )
+    removed: list[str] = []
+    async with session_factory()() as session, session.begin():
+        watchlist_repo = WatchlistRepository(session)
+        portfolio_repo = PortfolioRepository(session)
+        held = {p.symbol for p in await portfolio_repo.list_positions()}
+        for ticker in await watchlist_repo.list_all():
+            last_run = ticker.last_run_at
+            if last_run is not None and last_run.tzinfo:
+                last_run = last_run.replace(tzinfo=None)
+            if (
+                ticker.added_by == "screener"
+                and ticker.category == "satellite"
+                and ticker.symbol not in held  # position-pin: owned = untouchable
+                and ticker.tier == "weekly"
+                and ticker.last_rating in (None, "Hold")
+                and last_run is not None
+                and last_run < cutoff
+            ):
+                await watchlist_repo.remove(ticker)
+                removed.append(ticker.symbol)
+    if removed:
+        logger.info("Screener expiry: removed %s", ", ".join(removed))
+    return removed
+
+
 async def run_screener() -> list[dict]:
     """One full screener pass. Returns scored results (dicts for the API/UI)."""
     settings = get_settings()
     run_date = datetime.now(timezone.utc).date().isoformat()
 
-    candidates = await asyncio.to_thread(_collect_candidates_sync)
+    # Drain before filling: expire stale picks so seats free up.
+    await expire_stale_picks()
+
+    us_candidates, india_candidates = await asyncio.to_thread(_collect_candidates_sync)
     async with session_factory()() as session:
         watchlist_repo = WatchlistRepository(session)
         existing = {t.symbol for t in await watchlist_repo.list_all()}
-        watchlist_size = len(existing)
-    fresh = [s for s in candidates if s.upper() not in existing][:_MAX_ENRICHED]
+        satellite_count = await watchlist_repo.count_satellites()
+
+    fresh_us = [s for s in us_candidates if s.upper() not in existing][:_MAX_ENRICHED_US]
+    fresh_india = [
+        s for s in india_candidates if s.upper() not in existing
+    ][:_MAX_ENRICHED_INDIA]
+    fresh = fresh_us + fresh_india
     logger.info(
-        "Screener: %d candidates (%d new, enriching %d)",
-        len(candidates), len(candidates) - (len(candidates) - len(fresh)), len(fresh),
+        "Screener: %d US + %d India candidates, enriching %d + %d",
+        len(us_candidates), len(india_candidates), len(fresh_us), len(fresh_india),
     )
 
     scored: list[tuple[float, CandidateMetrics]] = []
@@ -188,7 +240,7 @@ async def run_screener() -> list[dict]:
             scored.append((score, metrics))
     scored.sort(key=lambda pair: pair[0], reverse=True)
 
-    capacity = max(0, settings.screener_watchlist_cap - watchlist_size)
+    capacity = max(0, settings.screener_satellite_cap - satellite_count)
     budget = min(settings.screener_max_adds, capacity)
     notifier = Notifier(settings)
     results: list[dict] = []
@@ -199,7 +251,9 @@ async def run_screener() -> list[dict]:
         for rank, (score, metrics) in enumerate(scored):
             add = rank < budget and score >= MIN_SCORE_TO_ADD
             if add:
-                await watchlist_repo.add(metrics.symbol, added_by="screener")
+                await watchlist_repo.add(
+                    metrics.symbol, added_by="screener", category="satellite"
+                )
             await screener_repo.add(ScreenerResult(
                 run_date=run_date,
                 symbol=metrics.symbol,

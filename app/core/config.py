@@ -43,8 +43,16 @@ class AssistantSettings(BaseSettings):
     # ``screener_max_adds`` high-scoring under-followed candidates per run,
     # never growing the watchlist past ``screener_watchlist_cap``.
     screener_enabled: bool = True
-    screener_max_adds: int = Field(default=2, ge=0, le=10)
-    screener_watchlist_cap: int = Field(default=25, ge=1)
+    # Throttled to match deep-analysis capacity: adds queue for initiation
+    # runs, so the faucet must not outrun the drain (~1/day ≈ initiation
+    # budget under the weekly cap).
+    screener_max_adds: int = Field(default=1, ge=0, le=10)
+    # Satellite seats only — core (hand-picked giants/ETFs) live outside this
+    # cap and never expire.
+    screener_satellite_cap: int = Field(default=10, ge=1)
+    # Screener picks that stayed boring (weekly tier, no position, Hold) for
+    # this many days fall off the list; the screener can re-discover them.
+    screener_expiry_days: int = Field(default=21, ge=1)
 
     # --- Paper portfolio ---
     # Virtual starting cash (USD) for the automatic paper broker. Changing it
@@ -55,6 +63,8 @@ class AssistantSettings(BaseSettings):
     # After this many consecutive Hold ratings a ticker drops from daily to
     # weekly runs; any non-Hold rating promotes it straight back to daily.
     assistant_demote_after_holds: int = Field(default=5, ge=1)
+    # Event thresholds and default stops are volatility-scaled per ticker —
+    # see app/services/volatility.py for the multipliers and bounds.
 
     # --- Run schedule ---
     # Analysis windows are DB-backed "schedule slots" managed from the web
@@ -63,6 +73,10 @@ class AssistantSettings(BaseSettings):
     # at most this many ticker-runs happen per UTC day — protects a limited
     # LLM quota (e.g. Ollama cloud free tier) from a misconfigured schedule.
     assistant_daily_run_budget: int = Field(default=4, ge=1)
+    # Weekly governor on top of the daily one: with Ollama cloud free tier a
+    # deep run costs ~8-9% of the weekly allowance, so ~11 runs/week is the
+    # sustainable ceiling. A violent Monday can't starve Friday.
+    assistant_weekly_run_budget: int = Field(default=11, ge=1)
 
     # --- Telegram ---
     telegram_bot_token: str = ""

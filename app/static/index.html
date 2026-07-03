@@ -169,11 +169,16 @@
   .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 
   /* Tables */
+  section { overflow-x: auto; }
   table.data { width: 100%; border-collapse: collapse; }
   table.data th { text-align: left; color: var(--muted); font-size: 11.5px; font-weight: 600;
                   padding: 6px 8px; border-bottom: 1px solid var(--grid); }
   table.data td { padding: 7px 8px; border-bottom: 1px solid var(--grid); font-size: 13px; }
   table.data td.num { font-variant-numeric: tabular-nums; }
+  table.data tbody tr:hover td { background: var(--page); }
+  button:focus-visible, select:focus-visible, input:focus-visible, a:focus-visible {
+    outline: 2px solid var(--series-1); outline-offset: 1px;
+  }
   .addrow { display: flex; gap: 8px; margin-bottom: 12px; }
   .addrow input { font: inherit; padding: 6px 10px; border: 1px solid var(--border);
                   border-radius: 6px; background: var(--page); color: var(--ink); width: 220px; }
@@ -184,8 +189,9 @@
   #toast {
     position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
     background: var(--ink); color: var(--page); padding: 8px 16px; border-radius: 8px;
-    font-size: 13px; display: none; z-index: 20;
+    font-size: 13px; display: none; z-index: 20; max-width: 90vw;
   }
+  #toast.err { background: var(--critical); color: #fff; }
   .quota-note { color: var(--muted); font-size: 12px; margin-top: 10px; }
 
   /* Portfolio */
@@ -210,10 +216,11 @@
   <h1>TradingAgents Assistant</h1>
   <span class="chip"><span class="dot" id="schedDot" style="background:var(--muted)"></span><span id="schedState">…</span></span>
   <span class="chip">model <b id="modelChip">…</b></span>
-  <span class="chip">runs today <b id="budgetChip">…</b></span>
+  <span class="chip">runs <b id="budgetChip">…</b></span>
   <span class="chip" id="alertChip">alerts …</span>
   <span class="chip" id="nextRunChip">next run …</span>
   <span class="chip" id="runningChip" style="display:none">⏳</span>
+  <span class="chip" id="refreshChip" role="button" tabindex="0" style="cursor:pointer; margin-left:auto" title="Refresh all data now">↻ <span id="updatedAt">…</span></span>
 </header>
 
 <nav id="nav">
@@ -310,8 +317,9 @@
       <button class="btn primary" id="addBtn">Add</button>
     </div>
     <table class="data"><thead><tr>
-      <th>Symbol</th><th>Market</th><th>Coverage</th><th>Rating</th><th>Consec. holds</th><th>Last run</th><th></th>
+      <th>Symbol</th><th>Type</th><th>Market</th><th>Coverage</th><th>Rating</th><th>Next review</th><th>Last run</th><th></th>
     </tr></thead><tbody id="wlBody"></tbody></table>
+    <div class="quota-note">🏛 core = permanent hand-picked holdings (giants, index ETFs) · 💎 satellite = screener finds, rotate in and out. Coverage: daily = every slot · weekly = check-ins + big-move triggers · paused = never analyzed. Positions are always monitored every 5 minutes regardless.</div>
   </section>
 </div>
 
@@ -394,9 +402,10 @@ function updateRunningChip(latestSignals) {
   chip.style.display = "inline-flex";
 }
 
-function toast(msg) {
+function toast(msg, isError = false) {
   const t = $("toast"); t.textContent = msg; t.style.display = "block";
-  clearTimeout(t._h); t._h = setTimeout(() => t.style.display = "none", 3500);
+  t.classList.toggle("err", isError);
+  clearTimeout(t._h); t._h = setTimeout(() => t.style.display = "none", isError ? 6000 : 3500);
 }
 async function api(path, opts) {
   const res = await fetch(path, opts);
@@ -422,7 +431,9 @@ async function loadHealth() {
     $("schedDot").style.background = health.scheduler_running ? "var(--good)" : "var(--critical)";
     $("schedState").textContent = health.scheduler_running ? "scheduler on" : "scheduler OFF";
     $("modelChip").textContent = `${health.llm_provider} · ${health.deep_model}`;
-    $("budgetChip").textContent = `${health.runs_today} / ${health.daily_run_budget}`;
+    $("budgetChip").textContent =
+      `today ${health.runs_today}/${health.daily_run_budget} · week ${health.runs_this_week}/${health.weekly_run_budget}`;
+    $("budgetChip").title = "Deep-analysis runs used vs budget (daily · weekly)";
     const alerts = [];
     alerts.push(health.telegram_configured ? "telegram ✓" : "telegram ✗");
     alerts.push(health.email_configured ? "email ✓" : "email ✗");
@@ -432,8 +443,9 @@ async function loadHealth() {
       ? `next: ${next.name} ${new Date(next.next_run).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" })}`
       : "no runs scheduled";
     $("quotaNote").textContent =
-      `Daily budget: ${health.daily_run_budget} ticker-runs across all slots (protects your LLM quota). ` +
-      `Used today: ${health.runs_today}. On the Ollama cloud free tier ~10–12 full runs/week is the sustainable pace.`;
+      `Budgets: ${health.daily_run_budget}/day · ${health.weekly_run_budget}/week (used: ${health.runs_today} today, ${health.runs_this_week} this week). ` +
+      `Slots fund a priority queue — position reviews first, then screener initiations, due reviews, big movers; a quiet day costs nothing.`;
+    $("updatedAt").textContent = new Date().toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
   } catch (e) { $("schedState").textContent = "unreachable"; }
 }
 
@@ -446,8 +458,8 @@ async function loadWatchlist() {
     lanes[lane].push(t);
   }
   const card = (t) => `
-    <div class="tcard" data-sym="${esc(t.symbol)}">
-      <div><div class="sym">${esc(t.symbol)}</div>
+    <div class="tcard" data-sym="${esc(t.symbol)}" tabindex="0" role="button">
+      <div><div class="sym">${t.category === "core" ? "🏛" : "💎"} ${esc(t.symbol)}</div>
         <div class="meta">${esc(t.market.toUpperCase())} · ${esc(t.tier)} · ${fmtWhen(t.last_run_at)}</div></div>
       ${badge(t.last_rating)}
     </div>`;
@@ -460,19 +472,34 @@ async function loadWatchlist() {
   $("wlBody").innerHTML = watchlist.map(t => `
     <tr>
       <td><b class="linksym" data-open="${esc(t.symbol)}">${esc(t.symbol)}</b></td>
+      <td title="${t.category === "core" ? "core: permanent holding" : "satellite: rotating screener pick"}">${t.category === "core" ? "🏛 core" : "💎 sat"}</td>
       <td>${esc(t.market.toUpperCase())}</td>
-      <td class="tier">${esc(t.tier)}</td>
+      <td>
+        <select data-cov="${esc(t.symbol)}" title="daily: every slot · weekly: Monday + big-move trigger · paused: never"
+          style="font:inherit; font-size:12px; padding:3px 5px; border:1px solid var(--border); border-radius:6px; background:var(--surface-1); color:var(--ink)">
+          <option value="daily" ${t.tier === "daily" ? "selected" : ""}>daily</option>
+          <option value="weekly" ${t.tier === "weekly" ? "selected" : ""}>weekly</option>
+          <option value="paused" ${t.tier === "paused" ? "selected" : ""}>paused</option>
+        </select>
+      </td>
       <td>${badge(t.last_rating)}</td>
-      <td class="num">${t.consecutive_holds}</td>
+      <td class="tier">${t.next_review_at ? new Date(t.next_review_at) <= new Date() ? '<span class="changed">due now</span>' : new Date(t.next_review_at).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "—"}</td>
       <td class="tier">${fmtWhen(t.last_run_at)}</td>
       <td style="text-align:right; white-space:nowrap">
-        ${t.tier === "paused"
-          ? `<button class="btn" data-act="resume" data-sym="${esc(t.symbol)}">resume</button>`
-          : `<button class="btn" data-act="pause" data-sym="${esc(t.symbol)}">pause</button>`}
         <button class="btn danger" data-act="del" data-sym="${esc(t.symbol)}">remove</button>
       </td>
     </tr>`).join("");
   $("wlBody").querySelectorAll("button").forEach(b => b.addEventListener("click", wlAction));
+  $("wlBody").querySelectorAll("select[data-cov]").forEach(sel =>
+    sel.addEventListener("change", async () => {
+      try {
+        await api(`/watchlist/${sel.dataset.cov}`, { method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ tier: sel.value }) });
+        toast(`${sel.dataset.cov} coverage set to ${sel.value}`);
+        await loadWatchlist();
+      } catch (e) { toast(e.message); await loadWatchlist(); }
+    }));
   document.querySelectorAll(".linksym[data-open]").forEach(el =>
     el.addEventListener("click", () => { location.hash = "#/overview"; openDetail(el.dataset.open); }));
 }
@@ -891,6 +918,14 @@ async function loadSignals() {
 async function refresh() {
   await Promise.allSettled([loadHealth(), loadWatchlist(), loadSignals(), loadPortfolio(), loadTrades(), loadScreener()]);
 }
+$("refreshChip").addEventListener("click", () => { refresh(); loadSlots(); toast("Refreshed"); });
+$("refreshChip").addEventListener("keydown", e => { if (e.key === "Enter") { refresh(); loadSlots(); } });
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && $("detail").classList.contains("open")) {
+    $("detail").classList.remove("open");
+  }
+});
+
 route();
 loadSlots();
 refresh();

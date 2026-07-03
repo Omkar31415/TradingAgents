@@ -16,7 +16,7 @@ a limited LLM quota (e.g. Ollama cloud free tier) in one day.
 import asyncio
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import uuid4
 
 import pytz
@@ -30,6 +30,7 @@ from app.repositories.portfolio import PortfolioRepository
 from app.repositories.schedule import ScheduleRepository
 from app.repositories.signals import SignalRepository
 from app.repositories.watchlist import WatchlistRepository
+from app.services.broker_rules import parse_review_days
 from app.services.notifier import Notifier
 from app.services.paper_broker import execute_signal, live_price, usd_rate
 from app.services.rotation import next_rotation_state
@@ -55,6 +56,7 @@ class TickerItem:
     asset_type: str
     prev_rating: str | None
     market: Market
+    category: str = "satellite"
 
 
 def _utc_midnight() -> datetime:
@@ -62,15 +64,41 @@ def _utc_midnight() -> datetime:
     return now.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
+def _utc_week_start() -> datetime:
+    midnight = _utc_midnight()
+    return midnight - timedelta(days=midnight.weekday())
+
+
 async def runs_remaining_today() -> int:
-    """How many ticker-runs the daily budget still allows."""
+    """Runs still allowed by BOTH the daily and the weekly budget."""
+    settings = get_settings()
     async with session_factory()() as session:
-        used = await SignalRepository(session).count_since(_utc_midnight())
-    return max(0, get_settings().assistant_daily_run_budget - used)
+        signals = SignalRepository(session)
+        used_today = await signals.count_since(_utc_midnight())
+        used_week = await signals.count_since(_utc_week_start())
+    return max(0, min(
+        settings.assistant_daily_run_budget - used_today,
+        settings.assistant_weekly_run_budget - used_week,
+    ))
+
+
+async def weekly_budget_used_fraction() -> float:
+    settings = get_settings()
+    async with session_factory()() as session:
+        used_week = await SignalRepository(session).count_since(_utc_week_start())
+    return used_week / max(1, settings.assistant_weekly_run_budget)
 
 
 async def run_slot(slot_id: int) -> list[dict]:
-    """Execute one scheduled slot: the stalest due tickers up to its budget."""
+    """Execute one scheduled slot.
+
+    A slot is a window of opportunity, not an obligation: it funds, in
+    priority order, (1) position reviews that are due or event-triggered,
+    (2) screener initiations, (3) due reviews without positions, (4) event
+    movers, and (5) — only while most of the weekly budget remains — a
+    heartbeat run for the stalest ticker. A quiet day analyzes nothing and
+    costs nothing.
+    """
     async with session_factory()() as session:
         slot = await ScheduleRepository(session).get(slot_id)
     if slot is None or not slot.enabled:
@@ -79,35 +107,136 @@ async def run_slot(slot_id: int) -> list[dict]:
 
     remaining = await runs_remaining_today()
     if remaining <= 0:
-        logger.warning("Daily run budget exhausted; skipping slot %r", slot.label)
+        logger.warning("Run budget exhausted; skipping slot %r", slot.label)
         return []
     batch_size = min(slot.max_tickers, remaining)
 
     market = Market(slot.market) if slot.market else None
-    tz = pytz.timezone(slot.timezone)
-    include_weekly = datetime.now(tz).weekday() == 0
+    queue = await _select_candidates(market, batch_size)
+    if not queue:
+        logger.info("Slot %r: nothing due, no events — 0 runs", slot.label)
+        return []
+
+    items = [
+        TickerItem(t.symbol, t.asset_type, t.last_rating, Market(t.market),
+                   t.category or "satellite")
+        for t in queue
+    ]
+    return await _run_batch(slot.label, items)
+
+
+async def _select_candidates(market: Market | None, batch_size: int) -> list:
+    """Priority-ordered ticker selection for a slot."""
+    from app.repositories.portfolio import PortfolioRepository as _PRepo
+
+    now = datetime.now(pytz.utc).replace(tzinfo=None)  # DB datetimes come back naive-UTC
 
     async with session_factory()() as session:
-        due = await WatchlistRepository(session).get_due_for_run(
-            market, include_weekly, limit=batch_size
-        )
-        items = [
-            TickerItem(t.symbol, t.asset_type, t.last_rating, Market(t.market)) for t in due
+        repo = WatchlistRepository(session)
+        rows = [
+            t for t in await repo.list_all()
+            if t.tier != Tier.PAUSED.value
+            and (market is None or t.market == market.value)
         ]
-    return await _run_batch(slot.label, items)
+        held = {p.symbol for p in await _PRepo(session).list_positions("paper")}
+
+    def _naive(dt):
+        return dt.replace(tzinfo=None) if dt is not None and dt.tzinfo else dt
+
+    due = [t for t in rows if _naive(t.next_review_at) is not None
+           and _naive(t.next_review_at) <= now]
+    never_run = [t for t in rows if t.last_run_at is None]
+
+    p1_position_due = [t for t in due if t.symbol in held]
+    p2_initiations = [t for t in never_run if t.added_by == "screener"]
+    p3_reviews = [t for t in due if t.symbol not in held]
+
+    picked: list = []
+    seen: set[str] = set()
+
+    def take(candidates):
+        for t in candidates:
+            if len(picked) >= batch_size:
+                return
+            if t.symbol not in seen:
+                seen.add(t.symbol)
+                picked.append(t)
+
+    take(p1_position_due)
+    take(p2_initiations)
+    take(p3_reviews)
+
+    # P4: event movers — volatility-scaled, only checked if room remains and
+    # only for tickers not already picked (price checks are free but slow-ish).
+    if len(picked) < batch_size:
+        candidates = [t for t in rows if t.symbol not in seen and t.last_run_at is not None]
+        movers = await _event_movers(candidates)
+        take(movers)
+
+    # P5: heartbeat for the stalest ticker — but never with scarce budget.
+    if len(picked) < batch_size and await weekly_budget_used_fraction() < 0.7:
+        stalest = sorted(
+            (t for t in rows if t.symbol not in seen),
+            key=lambda t: (_naive(t.last_run_at) or datetime.min),
+        )
+        take(stalest[:1])
+
+    return picked
+
+
+def _price_move_since_sync(symbol: str, since) -> float | None:
+    """Percent price change since a past datetime (free yfinance check)."""
+    import yfinance as yf
+
+    from tradingagents.dataflows.symbol_utils import normalize_symbol
+
+    try:
+        history = yf.Ticker(normalize_symbol(symbol)).history(
+            start=since.date().isoformat()
+        )
+        if len(history) < 2:
+            return None
+        first, last = float(history["Close"].iloc[0]), float(history["Close"].iloc[-1])
+        return (last - first) / first * 100
+    except Exception:
+        logger.warning("Price-move check failed for %s", symbol)
+        return None
+
+
+async def _event_movers(tickers: list) -> list:
+    """Tickers whose price moved past their own volatility-scaled threshold."""
+    from app.services.volatility import daily_volatility_pct_sync, event_threshold_pct
+
+    movers = []
+    for ticker in tickers[:15]:  # cap the free-API volume per slot
+        move = await asyncio.to_thread(
+            _price_move_since_sync, ticker.symbol, ticker.last_run_at
+        )
+        if move is None:
+            continue
+        vol = await asyncio.to_thread(daily_volatility_pct_sync, ticker.symbol)
+        threshold = event_threshold_pct(vol)
+        if abs(move) >= threshold:
+            logger.info(
+                "Event trigger: %s moved %+.1f%% since last analysis (threshold %.1f%%)",
+                ticker.symbol, move, threshold,
+            )
+            movers.append(ticker)
+    return movers
 
 
 async def run_ticker(symbol: str) -> list[dict]:
     """Manual single-ticker analysis (dashboard "Analyze now"). Budget applies."""
     if await runs_remaining_today() <= 0:
-        logger.warning("Daily run budget exhausted; refusing manual run for %s", symbol)
+        logger.warning("Run budget exhausted; refusing manual run for %s", symbol)
         return []
     async with session_factory()() as session:
         ticker = await WatchlistRepository(session).get_by_symbol(symbol)
     if ticker is None:
         logger.warning("Manual run requested for %s but it is not on the watchlist", symbol)
         return []
-    item = TickerItem(ticker.symbol, ticker.asset_type, ticker.last_rating, Market(ticker.market))
+    item = TickerItem(ticker.symbol, ticker.asset_type, ticker.last_rating,
+                      Market(ticker.market), ticker.category or "satellite")
     return await _run_batch(f"manual {ticker.symbol}", [item])
 
 
@@ -115,14 +244,16 @@ async def run_market(market: Market, include_weekly: bool = True) -> list[dict]:
     """Manual full-market run (dashboard / API trigger). Budget still applies."""
     remaining = await runs_remaining_today()
     if remaining <= 0:
-        logger.warning("Daily run budget exhausted; refusing manual %s run", market.value)
+        logger.warning("Run budget exhausted; refusing manual %s run", market.value)
         return []
     async with session_factory()() as session:
         due = await WatchlistRepository(session).get_due_for_run(
             market, include_weekly, limit=remaining
         )
         items = [
-            TickerItem(t.symbol, t.asset_type, t.last_rating, Market(t.market)) for t in due
+            TickerItem(t.symbol, t.asset_type, t.last_rating, Market(t.market),
+                       t.category or "satellite")
+            for t in due
         ]
     return await _run_batch(f"manual {market.value}", items)
 
@@ -163,7 +294,8 @@ async def _run_batch(label: str, items: list[TickerItem]) -> list[dict]:
             if outcome.ok and outcome.rating:
                 try:
                     summary = await execute_signal(
-                        item.symbol, item.market, outcome.rating, outcome.decision_text
+                        item.symbol, item.market, outcome.rating,
+                        outcome.decision_text, item.category,
                     )
                 except Exception:
                     logger.exception("Paper execution failed for %s", item.symbol)
@@ -217,22 +349,38 @@ async def _persist_outcome(market, symbol, prev_rating, outcome) -> dict:
         watchlist = WatchlistRepository(session)
         ticker = await watchlist.get_by_symbol(symbol)
         if ticker is not None:
-            ticker.last_run_at = datetime.now(pytz.utc)
+            now = datetime.now(pytz.utc)
+            ticker.last_run_at = now
             if outcome.ok and outcome.rating:
-                new_tier, holds = next_rotation_state(
-                    Tier(ticker.tier),
-                    ticker.consecutive_holds,
-                    outcome.rating,
-                    demote_after=get_settings().assistant_demote_after_holds,
-                )
-                if new_tier.value != ticker.tier:
-                    logger.info(
-                        "Rotation: %s %s -> %s after rating %s",
-                        symbol, ticker.tier, new_tier.value, outcome.rating,
+                held = await PortfolioRepository(session).get_position("paper", symbol)
+                if (
+                    ticker.added_by == "screener"
+                    and outcome.rating == "Hold"
+                    and held is None
+                ):
+                    # Fast-demote: one Hold on a screener pick with no position
+                    # is verdict enough — don't spend 5 runs learning it's dull.
+                    ticker.tier = Tier.WEEKLY.value
+                    ticker.consecutive_holds += 1
+                    logger.info("Fast-demote: screener pick %s -> weekly after Hold", symbol)
+                else:
+                    new_tier, holds = next_rotation_state(
+                        Tier(ticker.tier),
+                        ticker.consecutive_holds,
+                        outcome.rating,
+                        demote_after=get_settings().assistant_demote_after_holds,
                     )
-                ticker.tier = new_tier.value
-                ticker.consecutive_holds = holds
+                    if new_tier.value != ticker.tier:
+                        logger.info(
+                            "Rotation: %s %s -> %s after rating %s",
+                            symbol, ticker.tier, new_tier.value, outcome.rating,
+                        )
+                    ticker.tier = new_tier.value
+                    ticker.consecutive_holds = holds
                 ticker.last_rating = outcome.rating
+                # The analysis names its own next check-up date (clamped 3-21d).
+                review_days = parse_review_days(outcome.decision_text)
+                ticker.next_review_at = now + timedelta(days=review_days)
 
     return {
         "symbol": symbol,

@@ -21,8 +21,15 @@ from app.services.broker_rules import (
     parse_level,
     sell_quantity,
 )
+from app.services.volatility import daily_volatility_pct_sync, default_stop_pct
 
 logger = logging.getLogger(__name__)
+
+# Reflex confirmation: a stop/target breach must hold across two consecutive
+# monitor passes before acting, so one bad print can't trigger a sale.
+# In-memory is intentional — a restart just means re-confirming, which is the
+# conservative direction.
+_pending_breaches: dict[tuple[int, str], float] = {}  # (position_id, kind) -> first_seen_ts
 
 _FX_CACHE: dict[str, tuple[float, float]] = {}  # currency -> (rate, fetched_monotonic)
 _FX_TTL_SECONDS = 1800
@@ -101,7 +108,11 @@ async def paper_equity_usd() -> float | None:
 
 
 async def execute_signal(
-    symbol: str, market: Market, rating: str, decision_text: str | None
+    symbol: str,
+    market: Market,
+    rating: str,
+    decision_text: str | None,
+    category: str = "satellite",
 ) -> str | None:
     """Apply one rating to the paper book. Returns a human summary or None.
 
@@ -110,14 +121,14 @@ async def execute_signal(
     trims half. Hold does nothing.
     """
     if rating in ("Buy", "Overweight"):
-        return await _paper_buy(symbol, market, rating, decision_text)
+        return await _paper_buy(symbol, market, rating, decision_text, category)
     if rating in ("Sell", "Underweight"):
         return await _paper_sell(symbol, rating, reason=f"signal {rating}")
     return None
 
 
 async def _paper_buy(
-    symbol: str, market: Market, rating: str, decision_text: str | None
+    symbol: str, market: Market, rating: str, decision_text: str | None, category: str
 ) -> str | None:
     currency = currency_for_market(market)
     price = await live_price(symbol)
@@ -127,6 +138,13 @@ async def _paper_buy(
         logger.warning("Paper buy skipped for %s: no live price/FX", symbol)
         return None
 
+    # Every position gets a stop: the analyst's when given, else a default
+    # scaled to this ticker's own volatility (5-12% below entry).
+    stop = parse_level(decision_text, "stop_loss")
+    if stop is None or stop >= price:
+        vol = await asyncio.to_thread(daily_volatility_pct_sync, symbol)
+        stop = round(price * (1 - default_stop_pct(vol) / 100), 4)
+
     async with session_factory()() as session, session.begin():
         repo = PortfolioRepository(session)
         account = await repo.get_account()
@@ -135,7 +153,7 @@ async def _paper_buy(
         if await repo.get_position("paper", symbol) is not None:
             logger.info("Paper book already holds %s; not adding on %s", symbol, rating)
             return None
-        quantity = buy_quantity(rating, equity, account.cash, price, rate)
+        quantity = buy_quantity(rating, equity, account.cash, price, rate, category)
         if quantity <= 0:
             logger.info("Paper buy skipped for %s: insufficient cash for a meaningful order", symbol)
             return None
@@ -148,7 +166,7 @@ async def _paper_buy(
             currency=currency,
             quantity=quantity,
             avg_price=price,
-            stop_loss=parse_level(decision_text, "stop_loss"),
+            stop_loss=stop,
             price_target=parse_level(decision_text, "price_target"),
         ))
         await repo.add_trade(Trade(
@@ -203,45 +221,104 @@ async def _paper_sell(symbol: str, rating_or_all: str, reason: str) -> str | Non
     )
 
 
+async def _queue_post_mortem(symbol: str) -> None:
+    """Mark the ticker due for immediate deep review (budget-governed)."""
+    from app.repositories.watchlist import WatchlistRepository
+
+    async with session_factory()() as session, session.begin():
+        ticker = await WatchlistRepository(session).get_by_symbol(symbol)
+        if ticker is not None:
+            ticker.next_review_at = datetime.now(timezone.utc)
+
+
+def _confirmed(pos_id: int, kind: str) -> bool:
+    """True on the second consecutive breach sighting (whipsaw filter)."""
+    key = (pos_id, kind)
+    if key in _pending_breaches:
+        del _pending_breaches[key]
+        return True
+    _pending_breaches[key] = time.monotonic()
+    return False
+
+
 async def check_stops() -> list[str]:
-    """Price-only tripwire check (no LLM cost). Paper positions auto-sell on a
-    stop-loss breach; real positions only alert (and the stop is cleared so
-    the alert fires once)."""
+    """Reflex layer (no LLM cost): watch every open position's stop and target.
+
+    Paper positions act automatically — sell on a confirmed stop breach
+    (damage control) or a confirmed target hit (disciplined profit-taking) —
+    then queue a deep post-mortem to decide about re-entry. Real positions
+    only alert (the stop is cleared so the alert fires once). Confirmation
+    requires two consecutive monitor passes to avoid selling into one bad
+    print.
+    """
     from app.services.notifier import Notifier
 
     events: list[str] = []
     async with session_factory()() as session:
         positions = await PortfolioRepository(session).list_positions()
         snapshot = [
-            (p.id, p.account_type, p.symbol, p.stop_loss, p.currency) for p in positions
+            (p.id, p.account_type, p.symbol, p.stop_loss, p.price_target)
+            for p in positions
         ]
 
+    live_ids = set()
     notifier = Notifier(get_settings())
-    for pos_id, account_type, symbol, stop, _currency in snapshot:
-        if not stop:
+    for pos_id, account_type, symbol, stop, target in snapshot:
+        live_ids.add(pos_id)
+        if not stop and not target:
             continue
         price = await live_price(symbol)
-        if price is None or price > stop:
+        if price is None:
             continue
+
+        breach = None  # (kind, level)
+        if stop and price <= stop:
+            breach = ("stop-loss", stop)
+        elif target and account_type == "paper" and price >= target:
+            breach = ("target", target)
+        if breach is None:
+            _pending_breaches.pop((pos_id, "stop-loss"), None)
+            _pending_breaches.pop((pos_id, "target"), None)
+            continue
+
+        kind, level = breach
+        if not _confirmed(pos_id, kind):
+            logger.info(
+                "%s %s at %.2f crossed %s %.2f — awaiting confirmation",
+                symbol, kind, price, kind, level,
+            )
+            continue
+
         if account_type == "paper":
-            summary = await _paper_sell(symbol, "all", reason=f"stop-loss {stop:,.2f} hit")
+            reason = f"{kind} {level:,.2f} hit"
+            summary = await _paper_sell(symbol, "all", reason=reason)
             if summary:
                 events.append(summary)
-                await notifier.send_telegram(f"🛑 <b>Stop-loss hit</b> — paper {summary}")
+                emoji = "🛑" if kind == "stop-loss" else "🎯"
+                await notifier.send_telegram(
+                    f"{emoji} <b>{kind.capitalize()} hit</b> — paper {summary}"
+                )
+                await _queue_post_mortem(symbol)
         else:
             async with session_factory()() as session, session.begin():
                 position = await PortfolioRepository(session).get_position_by_id(pos_id)
                 if position is not None:
                     position.stop_loss = None
                     position.note = (
-                        (position.note or "") + f" [stop {stop:,.2f} hit "
+                        (position.note or "") + f" [stop {level:,.2f} hit "
                         f"{datetime.now(timezone.utc).date().isoformat()}]"
                     ).strip()
-            events.append(f"real holding {symbol} breached stop {stop:,.2f}")
+            events.append(f"real holding {symbol} breached stop {level:,.2f}")
             await notifier.send_telegram(
                 f"🛑 <b>{symbol}</b> fell to {price:,.2f} — below your stop of "
-                f"{stop:,.2f}. Review your real position."
+                f"{level:,.2f}. Review your real position."
             )
+
+    # Drop confirmation state for positions that no longer exist.
+    for key in list(_pending_breaches):
+        if key[0] not in live_ids:
+            del _pending_breaches[key]
+
     if events:
-        logger.info("Stop monitor events: %s", "; ".join(events))
+        logger.info("Monitor events: %s", "; ".join(events))
     return events

@@ -51,17 +51,37 @@ class WatchlistRepository:
         result = await self._session.execute(stmt)
         return list(result.scalars())
 
-    async def add(self, symbol: str, added_by: str = "manual") -> WatchlistTicker:
+    async def list_by_tier(self, market: Market | None, tier: Tier) -> list[WatchlistTicker]:
+        stmt = select(WatchlistTicker).where(WatchlistTicker.tier == tier.value)
+        if market is not None:
+            stmt = stmt.where(WatchlistTicker.market == market.value)
+        result = await self._session.execute(stmt)
+        return list(result.scalars())
+
+    async def add(
+        self, symbol: str, added_by: str = "manual", category: str | None = None
+    ) -> WatchlistTicker:
         symbol = symbol.upper().strip()
+        if category is None:
+            # Screener finds are satellites (rotating tournament); anything a
+            # human adds deliberately is treated as core conviction.
+            category = "satellite" if added_by == "screener" else "core"
         ticker = WatchlistTicker(
             symbol=symbol,
             market=infer_market(symbol).value,
             asset_type=infer_asset_type(symbol),
             added_by=added_by,
+            category=category,
         )
         self._session.add(ticker)
         await self._session.flush()
         return ticker
+
+    async def count_satellites(self) -> int:
+        result = await self._session.execute(
+            select(WatchlistTicker.id).where(WatchlistTicker.category == "satellite")
+        )
+        return len(result.scalars().all())
 
     async def remove(self, ticker: WatchlistTicker) -> None:
         await self._session.delete(ticker)

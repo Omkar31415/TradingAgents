@@ -25,9 +25,14 @@ class WatchlistTicker(Base):
     asset_type: Mapped[str] = mapped_column(String(16), default="stock")
     tier: Mapped[str] = mapped_column(String(16), default="daily", index=True)  # Tier enum value
     added_by: Mapped[str] = mapped_column(String(16), default="manual")  # seed|manual|screener
+    # core: permanent hand-picked holdings (giants, index ETFs) — never expire.
+    # satellite: screener-sourced candidates — rotating tournament, can expire.
+    category: Mapped[str] = mapped_column(String(16), default="satellite")
     consecutive_holds: Mapped[int] = mapped_column(Integer, default=0)
     last_rating: Mapped[str | None] = mapped_column(String(16), default=None)
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    # When the last analysis said it should be revisited (model-chosen date).
+    next_review_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     note: Mapped[str | None] = mapped_column(Text, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
