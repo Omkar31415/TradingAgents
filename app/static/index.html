@@ -127,20 +127,33 @@
   }
   #tooltip .v { font-weight: 650; font-variant-numeric: tabular-nums; }
   #tooltip .d { color: var(--muted); }
-  #report {
-    border-top: 1px solid var(--border); margin-top: 14px; padding-top: 12px;
-    max-height: 480px; overflow-y: auto; font-size: 13.5px;
+  #reports { margin-top: 14px; display: grid; gap: 8px; }
+  details.rpt { border: 1px solid var(--border); border-radius: 8px; background: var(--page); }
+  details.rpt summary {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 10px 12px; cursor: pointer; list-style: none; user-select: none;
+    font-size: 13px;
   }
-  #report h1, #report h2, #report h3, #report h4 {
+  details.rpt summary::-webkit-details-marker { display: none; }
+  details.rpt summary::before { content: "▸"; color: var(--muted); transition: transform .15s; }
+  details.rpt[open] summary::before { transform: rotate(90deg); }
+  details.rpt summary:hover { color: var(--series-1); }
+  details.rpt summary b { font-weight: 650; }
+  .rpt-body {
+    border-top: 1px solid var(--border); padding: 10px 14px;
+    max-height: 480px; overflow-y: auto; font-size: 13.5px; background: var(--surface-1);
+    border-radius: 0 0 8px 8px;
+  }
+  .rpt-body h1, .rpt-body h2, .rpt-body h3, .rpt-body h4 {
     font-size: 14px; margin: 14px 0 6px; color: var(--ink);
     text-transform: none; letter-spacing: 0;
   }
-  #report h1 { font-size: 15px; }
-  #report table { border-collapse: collapse; margin: 8px 0; width: 100%; overflow-x: auto; display: block; }
-  #report th, #report td { border: 1px solid var(--grid); padding: 4px 8px; text-align: left; font-size: 12.5px; }
-  #report th { color: var(--ink-2); }
-  #report code { background: var(--page); padding: 1px 4px; border-radius: 4px; font-size: 12px; }
-  #report hr { border: none; border-top: 1px solid var(--grid); }
+  .rpt-body h1 { font-size: 15px; }
+  .rpt-body table { border-collapse: collapse; margin: 8px 0; width: 100%; overflow-x: auto; display: block; }
+  .rpt-body th, .rpt-body td { border: 1px solid var(--grid); padding: 4px 8px; text-align: left; font-size: 12.5px; }
+  .rpt-body th { color: var(--ink-2); }
+  .rpt-body code { background: var(--page); padding: 1px 4px; border-radius: 4px; font-size: 12px; }
+  .rpt-body hr { border: none; border-top: 1px solid var(--grid); }
 
   /* Schedule */
   .slots { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 12px; }
@@ -243,11 +256,7 @@
       <svg id="chart" width="100%" height="260" role="img" aria-label="price history"></svg>
       <div id="tooltip"></div>
     </div>
-    <div class="row" id="reportBar" style="display:none; align-items:center; gap:8px; margin-top:12px">
-      <span class="tier">Analysis version:</span>
-      <select id="reportPick" style="font:inherit; font-size:12.5px; padding:4px 7px; border:1px solid var(--border); border-radius:6px; background:var(--surface-1); color:var(--ink)"></select>
-    </div>
-    <div id="report"><div class="empty">Loading analysis…</div></div>
+    <div id="reports"><div class="empty">Loading analyses…</div></div>
   </section>
 </div>
 
@@ -502,29 +511,52 @@ async function openDetail(sym) {
   $("detail").classList.add("open");
   $("detail").scrollIntoView({ behavior: "smooth", block: "start" });
   drawChart(sym, currentDays);
-  $("reportBar").style.display = "none";
   if (t && !t.last_rating) {
     // Never analyzed: skip the report fetch (avoids pointless 404s in the log)
-    $("report").innerHTML = `<div class="empty">Not analyzed yet — hit “🤖 Analyze now” to run the agents on ${esc(sym)} (~10–15 min, uses 1 run from today's budget).</div>`;
+    $("reports").innerHTML = `<div class="empty">Not analyzed yet — hit “🤖 Analyze now” to run the agents on ${esc(sym)} (~10–15 min, uses 1 run from today's budget).</div>`;
   } else {
     loadReportVersions(sym);
   }
 }
 
-async function loadReportVersions(sym, selectId = null) {
+async function loadReportVersions(sym, openId = null) {
+  const box = $("reports");
+  box.innerHTML = `<div class="empty">Loading analyses…</div>`;
   let versions = [];
   try { versions = await api(`/tickers/${sym}/reports`); } catch {}
-  const bar = $("reportBar"), pick = $("reportPick");
-  if (!versions.length) { bar.style.display = "none"; loadReport(sym); return; }
-  bar.style.display = versions.length > 1 ? "flex" : "none";
-  pick.innerHTML = versions.map(v => {
+  if (!versions.length) {
+    box.innerHTML = `<div class="empty">No analysis on record for ${esc(sym)} yet.</div>`;
+    return;
+  }
+  // One collapsible section per timestamped analysis; bodies lazy-load on expand.
+  box.innerHTML = versions.map(v => {
     const when = new Date(v.created_at).toLocaleString(undefined,
-      { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-    return `<option value="${v.id}">${when} — ${esc(v.rating ?? "?")}</option>`;
+      { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
+    return `<details class="rpt" data-sid="${v.id}">
+      <summary><b>${when}</b> ${badge(v.rating)}
+        <span class="tier">trade date ${esc(v.trade_date)}</span></summary>
+      <div class="rpt-body"><div class="empty">Loading…</div></div>
+    </details>`;
   }).join("");
-  pick.value = selectId ?? versions[0].id;
-  pick.onchange = () => loadReport(sym, pick.value);
-  loadReport(sym, pick.value);
+  box.querySelectorAll("details.rpt").forEach(d =>
+    d.addEventListener("toggle", () => {
+      if (d.open && !d.dataset.loaded) loadReportInto(sym, d);
+    }));
+  const target = box.querySelector(`details[data-sid="${openId}"]`) || box.querySelector("details.rpt");
+  target.open = true;
+  if (openId) target.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+async function loadReportInto(sym, detailsEl) {
+  detailsEl.dataset.loaded = "1";
+  const body = detailsEl.querySelector(".rpt-body");
+  try {
+    const r = await api(`/tickers/${sym}/report?signal_id=${detailsEl.dataset.sid}`);
+    body.innerHTML = mdToHtml(r.markdown);
+  } catch (e) {
+    body.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+    delete detailsEl.dataset.loaded;
+  }
 }
 $("dClose").addEventListener("click", () => $("detail").classList.remove("open"));
 $("dAnalyze").addEventListener("click", async () => {
@@ -652,19 +684,6 @@ function mdToHtml(md) {
   if (inList) html += "</ul>";
   flushTable();
   return html;
-}
-async function loadReport(sym, signalId = null) {
-  const box = $("report");
-  box.innerHTML = `<div class="empty">Loading analysis…</div>`;
-  try {
-    const url = signalId ? `/tickers/${sym}/report?signal_id=${signalId}` : `/tickers/${sym}/report`;
-    const r = await api(url);
-    const when = new Date(r.created_at).toLocaleString();
-    box.innerHTML = `<div class="tier" style="margin-bottom:6px">Analyzed ${esc(when)} · trade date ${esc(r.trade_date)} · rating ${esc(r.rating ?? "?")}</div>`
-      + mdToHtml(r.markdown);
-  } catch (e) {
-    box.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
-  }
 }
 
 /* ---------- schedule ---------- */
