@@ -319,7 +319,7 @@
     <table class="data"><thead><tr>
       <th>Symbol</th><th>Type</th><th>Market</th><th>Coverage</th><th>Rating</th><th>Next review</th><th>Last run</th><th></th>
     </tr></thead><tbody id="wlBody"></tbody></table>
-    <div class="quota-note">🏛 core = permanent hand-picked holdings (giants, index ETFs) · 💎 satellite = screener finds, rotate in and out. Coverage: daily = every slot · weekly = check-ins + big-move triggers · paused = never analyzed. Positions are always monitored every 5 minutes regardless.</div>
+    <div class="quota-note">🏛 core = permanent hand-picked holdings (giants, index ETFs) · 💎 satellite = screener finds, rotate in and out. <b>When is a ticker analyzed?</b> The "Next review" date (chosen by its last analysis), or earlier on an abnormal price move or near a stop/target — set coverage to "paused" to opt a ticker out entirely. Positions are always price-monitored every 5 minutes regardless.</div>
   </section>
 </div>
 
@@ -475,10 +475,9 @@ async function loadWatchlist() {
       <td title="${t.category === "core" ? "core: permanent holding" : "satellite: rotating screener pick"}">${t.category === "core" ? "🏛 core" : "💎 sat"}</td>
       <td>${esc(t.market.toUpperCase())}</td>
       <td>
-        <select data-cov="${esc(t.symbol)}" title="daily: every slot · weekly: Monday + big-move trigger · paused: never"
+        <select data-cov="${esc(t.symbol)}" title="auto: the assistant schedules analyses itself (review dates, big moves, position priority) · paused: never analyzed"
           style="font:inherit; font-size:12px; padding:3px 5px; border:1px solid var(--border); border-radius:6px; background:var(--surface-1); color:var(--ink)">
-          <option value="daily" ${t.tier === "daily" ? "selected" : ""}>daily</option>
-          <option value="weekly" ${t.tier === "weekly" ? "selected" : ""}>weekly</option>
+          <option value="daily" ${t.tier !== "paused" ? "selected" : ""}>auto</option>
           <option value="paused" ${t.tier === "paused" ? "selected" : ""}>paused</option>
         </select>
       </td>

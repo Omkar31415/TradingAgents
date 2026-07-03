@@ -196,7 +196,6 @@ async def expire_stale_picks() -> list[str]:
                 ticker.added_by == "screener"
                 and ticker.category == "satellite"
                 and ticker.symbol not in held  # position-pin: owned = untouchable
-                and ticker.tier == "weekly"
                 and ticker.last_rating in (None, "Hold")
                 and last_run is not None
                 and last_run < cutoff
