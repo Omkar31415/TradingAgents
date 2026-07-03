@@ -486,6 +486,7 @@ async function loadWatchlist() {
       <td class="tier">${t.next_review_at ? new Date(t.next_review_at) <= new Date() ? '<span class="changed">due now</span>' : new Date(t.next_review_at).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "—"}</td>
       <td class="tier">${fmtWhen(t.last_run_at)}</td>
       <td style="text-align:right; white-space:nowrap">
+        <button class="btn primary" data-act="analyze" data-sym="${esc(t.symbol)}" title="Run deep analysis now (uses 1 run from the budget)">🤖 analyze</button>
         <button class="btn danger" data-act="del" data-sym="${esc(t.symbol)}">remove</button>
       </td>
     </tr>`).join("");
@@ -509,11 +510,16 @@ async function wlAction(ev) {
     if (act === "del") {
       if (!confirm(`Remove ${sym} from the watchlist? Its run history stays.`)) return;
       await api(`/watchlist/${sym}`, { method: "DELETE" });
+    } else if (act === "analyze") {
+      await api(`/runs/ticker/${sym}`, { method: "POST" });
+      setRunning(sym);
+      toast(`${sym} analysis started — ~10–15 min, uses 1 run from the budget`);
+      return;
     } else {
       await api(`/watchlist/${sym}/${act}`, { method: "POST" });
     }
     await loadWatchlist();
-  } catch (e) { toast(e.message); }
+  } catch (e) { toast(e.message, true); }
 }
 $("addBtn").addEventListener("click", async () => {
   const sym = $("addSym").value.trim();
