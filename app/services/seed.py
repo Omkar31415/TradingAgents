@@ -28,14 +28,19 @@ SEED_SYMBOLS = [
     "BTC-USD", "ETH-USD",
 ]
 
-# Default analysis windows (user-editable in the dashboard). Only two enabled
-# out of the box: with an Ollama-cloud free tier of roughly 10-12 full runs
-# per week, 2 runs/day is the sustainable ceiling. Times are in the user's
-# local zone (America/Chicago) but each slot's timezone is editable.
+# Default analysis windows (user-editable in the dashboard; more can be added
+# from the UI). Pre-market slots inform entries; pre-close slots inform
+# same-day sell/hold decisions before the bell. Watch the LLM quota when
+# enabling more: an Ollama-cloud free tier sustains roughly 10-12 full
+# runs/week, and the daily budget guard caps totals per day regardless.
 SEED_SLOTS = [
     ScheduleSlot(label="US pre-market", run_time="07:30", timezone="America/Chicago",
                  market="us", enabled=True, max_tickers=1),
+    ScheduleSlot(label="US close", run_time="15:15", timezone="America/New_York",
+                 market="us", enabled=True, max_tickers=1),
     ScheduleSlot(label="India pre-market", run_time="21:30", timezone="America/Chicago",
+                 market="india", enabled=True, max_tickers=1),
+    ScheduleSlot(label="India close", run_time="14:45", timezone="Asia/Kolkata",
                  market="india", enabled=True, max_tickers=1),
     ScheduleSlot(label="US midday", run_time="12:00", timezone="America/Chicago",
                  market="us", enabled=False, max_tickers=1),

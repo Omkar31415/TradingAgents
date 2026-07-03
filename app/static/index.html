@@ -208,6 +208,7 @@
         <button data-days="180" class="active">6M</button>
         <button data-days="365">1Y</button>
       </div>
+      <button class="btn primary" id="dAnalyze">🤖 Analyze now</button>
       <button class="btn" id="dClose">✕ close</button>
     </div>
     <div id="chartwrap">
@@ -248,6 +249,10 @@
   <section>
     <h2>Analysis schedule <span class="sub">— when the agents run and how many tickers per window</span></h2>
     <div class="slots" id="slots"></div>
+    <div class="addrow" style="margin-top:12px">
+      <button class="btn primary" id="slotAdd">＋ Add slot</button>
+      <span class="tier" style="align-self:center">new slots start disabled — set time/market, then enable</span>
+    </div>
     <div class="quota-note" id="quotaNote"></div>
   </section>
 
@@ -419,9 +424,21 @@ async function openDetail(sym) {
   $("detail").classList.add("open");
   $("detail").scrollIntoView({ behavior: "smooth", block: "start" });
   drawChart(sym, currentDays);
-  loadReport(sym);
+  if (t && !t.last_rating) {
+    // Never analyzed: skip the report fetch (avoids pointless 404s in the log)
+    $("report").innerHTML = `<div class="empty">Not analyzed yet — hit “🤖 Analyze now” to run the agents on ${esc(sym)} (~10–15 min, uses 1 run from today's budget).</div>`;
+  } else {
+    loadReport(sym);
+  }
 }
 $("dClose").addEventListener("click", () => $("detail").classList.remove("open"));
+$("dAnalyze").addEventListener("click", async () => {
+  if (!currentSymbol) return;
+  try {
+    await api(`/runs/ticker/${currentSymbol}`, { method: "POST" });
+    toast(`${currentSymbol} analysis started — ~10–15 min; you'll get a Telegram alert if the rating changes`);
+  } catch (e) { toast(e.message); }
+});
 $("ranges").querySelectorAll("button").forEach(b => b.addEventListener("click", () => {
   $("ranges").querySelectorAll("button").forEach(x => x.classList.remove("active"));
   b.classList.add("active");
@@ -576,6 +593,7 @@ async function loadSlots() {
         <div><label>Tickers per run</label><input type="number" data-f="max_tickers" min="1" max="20" value="${s.max_tickers}"></div>
       </div>
       <div class="row" style="justify-content:flex-end">
+        <button class="btn danger" data-del title="Delete this slot">🗑</button>
         <button class="btn" data-run>▶ Run now</button>
         <button class="btn primary" data-save>Save</button>
       </div>
@@ -601,8 +619,26 @@ async function loadSlots() {
         toast(`${r.slot} started — a full analysis takes ~10–15 min per ticker`);
       } catch (e) { toast(e.message); }
     });
+    card.querySelector("[data-del]").addEventListener("click", async () => {
+      const label = card.querySelector('[data-f="label"]').value;
+      if (!confirm(`Delete slot "${label}"?`)) return;
+      try {
+        await api(`/schedule/${card.dataset.id}`, { method: "DELETE" });
+        toast(`Slot "${label}" deleted`);
+        await Promise.all([loadSlots(), loadHealth()]);
+      } catch (e) { toast(e.message); }
+    });
   });
 }
+$("slotAdd").addEventListener("click", async () => {
+  try {
+    await api("/schedule", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ label: "New slot", run_time: "12:00", timezone: "America/Chicago",
+                             market: "any", enabled: false, max_tickers: 1 }) });
+    toast("Slot added (disabled) — set its time and market, then enable and save");
+    await loadSlots();
+  } catch (e) { toast(e.message); }
+});
 
 /* ---------- portfolio ---------- */
 const usd = (v, dp = 0) => v == null ? "—" : "$" + v.toLocaleString(undefined, { maximumFractionDigits: dp });

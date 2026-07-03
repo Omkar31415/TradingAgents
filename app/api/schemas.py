@@ -56,6 +56,15 @@ class ScheduleSlotItem(BaseModel):
     max_tickers: int
 
 
+class ScheduleSlotCreate(BaseModel):
+    label: str = Field(min_length=1, max_length=64)
+    run_time: str = Field(pattern=r"^([01]?\d|2[0-3]):[0-5]\d$")
+    timezone: str = "America/Chicago"
+    market: str | None = Field(default=None, description="us / india / crypto, or null for any")
+    enabled: bool = True
+    max_tickers: int = Field(default=1, ge=1, le=20)
+
+
 class ScheduleSlotUpdate(BaseModel):
     label: str | None = Field(default=None, min_length=1, max_length=64)
     run_time: str | None = Field(default=None, pattern=r"^([01]?\d|2[0-3]):[0-5]\d$")

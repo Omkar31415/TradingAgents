@@ -97,6 +97,20 @@ async def run_slot(slot_id: int) -> list[dict]:
     return await _run_batch(slot.label, items)
 
 
+async def run_ticker(symbol: str) -> list[dict]:
+    """Manual single-ticker analysis (dashboard "Analyze now"). Budget applies."""
+    if await runs_remaining_today() <= 0:
+        logger.warning("Daily run budget exhausted; refusing manual run for %s", symbol)
+        return []
+    async with session_factory()() as session:
+        ticker = await WatchlistRepository(session).get_by_symbol(symbol)
+    if ticker is None:
+        logger.warning("Manual run requested for %s but it is not on the watchlist", symbol)
+        return []
+    item = TickerItem(ticker.symbol, ticker.asset_type, ticker.last_rating, Market(ticker.market))
+    return await _run_batch(f"manual {ticker.symbol}", [item])
+
+
 async def run_market(market: Market, include_weekly: bool = True) -> list[dict]:
     """Manual full-market run (dashboard / API trigger). Budget still applies."""
     remaining = await runs_remaining_today()
