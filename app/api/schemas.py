@@ -26,6 +26,7 @@ class WatchlistItem(BaseModel):
 class SignalItem(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
+    id: int
     symbol: str
     market: str
     trade_date: str
@@ -82,10 +83,21 @@ class PriceHistory(BaseModel):
     close: list[float]
 
 
+class ReportVersionItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    trade_date: str
+    rating: str | None
+    created_at: datetime
+
+
 class ReportResponse(BaseModel):
+    signal_id: int
     symbol: str
     trade_date: str
     rating: str | None
+    created_at: datetime
     markdown: str
 
 

@@ -39,3 +39,16 @@ class SignalRepository:
             .limit(1)
         )
         return result.scalar_one_or_none()
+
+    async def list_success(self, symbol: str, limit: int = 20) -> list[SignalRecord]:
+        """All successful analyses for a ticker, newest first — the report versions."""
+        result = await self._session.execute(
+            select(SignalRecord)
+            .where(SignalRecord.symbol == symbol.upper(), SignalRecord.status == "success")
+            .order_by(SignalRecord.created_at.desc())
+            .limit(limit)
+        )
+        return list(result.scalars())
+
+    async def get(self, signal_id: int) -> SignalRecord | None:
+        return await self._session.get(SignalRecord, signal_id)

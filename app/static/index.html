@@ -215,6 +215,10 @@
       <svg id="chart" width="100%" height="260" role="img" aria-label="price history"></svg>
       <div id="tooltip"></div>
     </div>
+    <div class="row" id="reportBar" style="display:none; align-items:center; gap:8px; margin-top:12px">
+      <span class="tier">Analysis version:</span>
+      <select id="reportPick" style="font:inherit; font-size:12.5px; padding:4px 7px; border:1px solid var(--border); border-radius:6px; background:var(--surface-1); color:var(--ink)"></select>
+    </div>
     <div id="report"><div class="empty">Loading analysis…</div></div>
   </section>
 
@@ -424,12 +428,29 @@ async function openDetail(sym) {
   $("detail").classList.add("open");
   $("detail").scrollIntoView({ behavior: "smooth", block: "start" });
   drawChart(sym, currentDays);
+  $("reportBar").style.display = "none";
   if (t && !t.last_rating) {
     // Never analyzed: skip the report fetch (avoids pointless 404s in the log)
     $("report").innerHTML = `<div class="empty">Not analyzed yet — hit “🤖 Analyze now” to run the agents on ${esc(sym)} (~10–15 min, uses 1 run from today's budget).</div>`;
   } else {
-    loadReport(sym);
+    loadReportVersions(sym);
   }
+}
+
+async function loadReportVersions(sym, selectId = null) {
+  let versions = [];
+  try { versions = await api(`/tickers/${sym}/reports`); } catch {}
+  const bar = $("reportBar"), pick = $("reportPick");
+  if (!versions.length) { bar.style.display = "none"; loadReport(sym); return; }
+  bar.style.display = versions.length > 1 ? "flex" : "none";
+  pick.innerHTML = versions.map(v => {
+    const when = new Date(v.created_at).toLocaleString(undefined,
+      { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+    return `<option value="${v.id}">${when} — ${esc(v.rating ?? "?")}</option>`;
+  }).join("");
+  pick.value = selectId ?? versions[0].id;
+  pick.onchange = () => loadReport(sym, pick.value);
+  loadReport(sym, pick.value);
 }
 $("dClose").addEventListener("click", () => $("detail").classList.remove("open"));
 $("dAnalyze").addEventListener("click", async () => {
@@ -557,12 +578,14 @@ function mdToHtml(md) {
   flushTable();
   return html;
 }
-async function loadReport(sym) {
+async function loadReport(sym, signalId = null) {
   const box = $("report");
   box.innerHTML = `<div class="empty">Loading analysis…</div>`;
   try {
-    const r = await api(`/tickers/${sym}/report`);
-    box.innerHTML = `<div class="tier" style="margin-bottom:6px">Analysis of ${esc(r.trade_date)} · rating ${esc(r.rating ?? "?")}</div>`
+    const url = signalId ? `/tickers/${sym}/report?signal_id=${signalId}` : `/tickers/${sym}/report`;
+    const r = await api(url);
+    const when = new Date(r.created_at).toLocaleString();
+    box.innerHTML = `<div class="tier" style="margin-bottom:6px">Analyzed ${esc(when)} · trade date ${esc(r.trade_date)} · rating ${esc(r.rating ?? "?")}</div>`
       + mdToHtml(r.markdown);
   } catch (e) {
     box.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
@@ -744,7 +767,7 @@ $("screenerRun").addEventListener("click", async () => {
 async function loadSignals() {
   const sigs = await api("/signals?limit=30");
   $("sigBody").innerHTML = sigs.length ? sigs.map(s => `
-    <tr>
+    <tr ${s.status === "success" ? `class="sigrow" style="cursor:pointer" title="Open this analysis" data-sid="${s.id}" data-sym="${esc(s.symbol)}"` : ""}>
       <td class="tier">${fmtWhen(s.created_at)}</td>
       <td><b>${esc(s.symbol)}</b></td>
       <td>${badge(s.rating)}</td>
@@ -752,6 +775,18 @@ async function loadSignals() {
       <td>${s.status === "success" ? "✓" : `<span style="color:var(--critical)" title="${esc(s.error ?? "")}">✗ failed</span>`}</td>
       <td class="num tier">${s.duration_seconds ? Math.round(s.duration_seconds / 60) + "m" : ""}</td>
     </tr>`).join("") : `<tr><td colspan="6" class="empty">No runs yet — hit “Run now” on a slot above, or wait for the schedule.</td></tr>`;
+  $("sigBody").querySelectorAll("tr.sigrow").forEach(row => row.addEventListener("click", async () => {
+    const sym = row.dataset.sym, sid = row.dataset.sid;
+    const t = watchlist.find(x => x.symbol === sym);
+    currentSymbol = sym;
+    $("dSymbol").textContent = sym;
+    $("dBadge").innerHTML = badge(t?.last_rating);
+    $("dMeta").textContent = t ? `${t.market.toUpperCase()} · ${t.tier} coverage · last analyzed ${fmtWhen(t.last_run_at)}` : "";
+    $("detail").classList.add("open");
+    $("detail").scrollIntoView({ behavior: "smooth", block: "start" });
+    drawChart(sym, currentDays);
+    await loadReportVersions(sym, sid);
+  }));
 }
 
 /* ---------- boot + refresh ---------- */

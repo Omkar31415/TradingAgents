@@ -9,7 +9,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.schemas import PriceHistory, ReportResponse
+from app.api.schemas import PriceHistory, ReportResponse, ReportVersionItem
 from app.models.base import get_session
 from app.repositories.signals import SignalRepository
 
@@ -54,10 +54,28 @@ async def price_history(
     return PriceHistory(symbol=symbol.upper(), dates=dates, close=close)
 
 
+@router.get("/{symbol}/reports", response_model=list[ReportVersionItem])
+async def report_versions(symbol: str, session: SessionDep) -> list[ReportVersionItem]:
+    """Every stored analysis of this ticker, newest first (each run is kept)."""
+    records = await SignalRepository(session).list_success(symbol)
+    return [ReportVersionItem.model_validate(r) for r in records]
+
+
 @router.get("/{symbol}/report", response_model=ReportResponse)
-async def latest_report(symbol: str, session: SessionDep) -> ReportResponse:
-    """The most recent successful analysis report for a ticker."""
-    record = await SignalRepository(session).latest_success(symbol)
+async def report(
+    symbol: str, session: SessionDep, signal_id: int | None = None
+) -> ReportResponse:
+    """One analysis report: the latest by default, or a specific past run
+    via ``signal_id`` (from ``/tickers/{symbol}/reports``)."""
+    repo = SignalRepository(session)
+    if signal_id is not None:
+        record = await repo.get(signal_id)
+        if record is not None and (
+            record.symbol != symbol.upper() or record.status != "success"
+        ):
+            record = None
+    else:
+        record = await repo.latest_success(symbol)
     if record is None or not record.report_path:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -73,8 +91,10 @@ async def latest_report(symbol: str, session: SessionDep) -> ReportResponse:
         )
     markdown = await asyncio.to_thread(report_file.read_text, "utf-8")
     return ReportResponse(
+        signal_id=record.id,
         symbol=record.symbol,
         trade_date=record.trade_date,
         rating=record.rating,
+        created_at=record.created_at,
         markdown=markdown,
     )
