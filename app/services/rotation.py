@@ -1,12 +1,13 @@
 """Watchlist rotation rules — pure logic, no I/O.
 
-Token-spend control: a ticker "wastes" LLM budget when it produces no
-actionable signal run after run, not when its price falls (a falling price
-with a timely Sell call is the assistant doing its job). So demotion is
-driven by consecutive Hold ratings only, and any actionable rating promotes
-a ticker straight back to daily coverage. Tickers are never auto-deleted:
-history and the engine's reflection loop stay intact, and a demoted ticker
-still gets a weekly check-in that can resurface it.
+Since scheduling moved to the priority queue (model-chosen review dates,
+volatility-scaled event triggers, position-first funding), the coverage tier
+no longer drives WHEN analysis happens — it is the user's preference plus a
+demotion backstop. So rotation only ever demotes (persistent Holds → weekly)
+and never flips a tier upward: an actionable rating already gets attention
+through its review date and, if bought, position priority. Tickers are never
+auto-deleted here; expiry is the screener's job and position-holders are
+pinned.
 """
 
 from app.domain import HOLD_RATING, Tier
@@ -34,5 +35,5 @@ def next_rotation_state(
         return tier, holds
 
     # Any actionable rating (Buy/Overweight/Underweight/Sell): reset the
-    # counter and make sure the ticker is back on daily coverage.
-    return Tier.DAILY, 0
+    # boredom counter; the tier the user chose stays put.
+    return tier, 0

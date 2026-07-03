@@ -40,9 +40,11 @@ class TestRotation:
         assert holds == 5
 
     @pytest.mark.parametrize("rating", ["Buy", "Overweight", "Underweight", "Sell"])
-    def test_actionable_rating_resets_and_promotes(self, rating):
+    def test_actionable_rating_resets_counter_but_keeps_tier(self, rating):
+        # Scheduling is review-date driven now; the user's coverage choice
+        # stays put — an actionable rating must not flip weekly to daily.
         tier, holds = next_rotation_state(Tier.WEEKLY, 7, rating, demote_after=5)
-        assert tier is Tier.DAILY
+        assert tier is Tier.WEEKLY
         assert holds == 0
 
     def test_weekly_ticker_holding_stays_weekly(self):
