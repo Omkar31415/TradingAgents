@@ -43,10 +43,11 @@
     font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
     font-size: 14px; line-height: 1.45;
   }
+  .topbar { position: sticky; top: 0; z-index: 5; }
   header {
     display: flex; flex-wrap: wrap; align-items: center; gap: 12px;
     padding: 14px 20px; border-bottom: 1px solid var(--border);
-    background: var(--surface-1); position: sticky; top: 0; z-index: 5;
+    background: var(--surface-1);
   }
   header h1 { font-size: 16px; margin: 0 8px 0 0; font-weight: 650; }
   .chip {
@@ -56,7 +57,19 @@
   }
   .chip b { color: var(--ink); font-weight: 600; }
   .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  nav {
+    display: flex; gap: 4px; padding: 0 20px; background: var(--surface-1);
+    border-bottom: 1px solid var(--border); overflow-x: auto;
+  }
+  nav a {
+    padding: 10px 14px; font-size: 13px; color: var(--ink-2); text-decoration: none;
+    border-bottom: 2px solid transparent; white-space: nowrap;
+  }
+  nav a:hover { color: var(--ink); }
+  nav a.active { color: var(--ink); font-weight: 650; border-bottom-color: var(--series-1); }
   main { max-width: 1180px; margin: 0 auto; padding: 20px; display: grid; gap: 20px; }
+  .page { display: none; }
+  .page.active { display: grid; gap: 20px; }
   section {
     background: var(--surface-1); border: 1px solid var(--border);
     border-radius: 10px; padding: 16px 18px;
@@ -91,7 +104,7 @@
   .empty { color: var(--muted); font-size: 12.5px; padding: 6px 4px; }
 
   /* Detail panel */
-  #detail { display: none; scroll-margin-top: 64px; }
+  #detail { display: none; scroll-margin-top: 100px; }
   #detail.open { display: block; }
   .detail-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
   .detail-head h3 { margin: 0; font-size: 18px; }
@@ -152,6 +165,8 @@
   .addrow input { font: inherit; padding: 6px 10px; border: 1px solid var(--border);
                   border-radius: 6px; background: var(--page); color: var(--ink); width: 220px; }
   .tier { font-size: 11.5px; color: var(--muted); }
+  .linksym { cursor: pointer; }
+  .linksym:hover { text-decoration: underline; color: var(--series-1); }
   .changed { color: var(--good-text); font-weight: 650; }
   #toast {
     position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
@@ -177,6 +192,7 @@
 </style>
 </head>
 <body>
+<div class="topbar">
 <header>
   <h1>TradingAgents Assistant</h1>
   <span class="chip"><span class="dot" id="schedDot" style="background:var(--muted)"></span><span id="schedState">…</span></span>
@@ -184,9 +200,21 @@
   <span class="chip">runs today <b id="budgetChip">…</b></span>
   <span class="chip" id="alertChip">alerts …</span>
   <span class="chip" id="nextRunChip">next run …</span>
+  <span class="chip" id="runningChip" style="display:none">⏳</span>
 </header>
 
+<nav id="nav">
+  <a href="#/overview">📊 Overview</a>
+  <a href="#/portfolio">💼 Portfolio</a>
+  <a href="#/watchlist">📋 Watchlist</a>
+  <a href="#/schedule">🗓 Schedule</a>
+  <a href="#/screener">🔎 Screener</a>
+  <a href="#/history">🕘 History</a>
+</nav>
+</div>
+
 <main>
+<div class="page" id="page-overview">
   <section>
     <h2>Action board <span class="sub">— latest rating per ticker; click a card for chart &amp; full analysis</span></h2>
     <div class="board">
@@ -221,7 +249,9 @@
     </div>
     <div id="report"><div class="empty">Loading analysis…</div></div>
   </section>
+</div>
 
+<div class="page" id="page-portfolio">
   <section>
     <h2>Portfolio <span class="sub">— paper book trades every signal automatically at live prices; log your real buys below</span></h2>
     <div class="tiles" id="tiles"></div>
@@ -249,7 +279,9 @@
       <th>When</th><th>Book</th><th>Side</th><th>Symbol</th><th>Qty @ price</th><th>Reason</th><th>Realized P&amp;L</th>
     </tr></thead><tbody id="tradeBody"></tbody></table>
   </section>
+</div>
 
+<div class="page" id="page-schedule">
   <section>
     <h2>Analysis schedule <span class="sub">— when the agents run and how many tickers per window</span></h2>
     <div class="slots" id="slots"></div>
@@ -259,7 +291,9 @@
     </div>
     <div class="quota-note" id="quotaNote"></div>
   </section>
+</div>
 
+<div class="page" id="page-watchlist">
   <section>
     <h2>Watchlist</h2>
     <div class="addrow">
@@ -270,7 +304,9 @@
       <th>Symbol</th><th>Market</th><th>Coverage</th><th>Rating</th><th>Consec. holds</th><th>Last run</th><th></th>
     </tr></thead><tbody id="wlBody"></tbody></table>
   </section>
+</div>
 
+<div class="page" id="page-screener">
   <section>
     <h2>Anomaly screener <span class="sub">— daily hunt for under-followed strength (revenue growth + momentum + insider buying vs. low attention); top picks join the watchlist automatically</span></h2>
     <div class="addrow">
@@ -281,13 +317,16 @@
       <th>Date</th><th>Symbol</th><th>Market</th><th>Score</th><th>Why</th><th>Added</th>
     </tr></thead><tbody id="screenerBody"></tbody></table>
   </section>
+</div>
 
+<div class="page" id="page-history">
   <section>
-    <h2>Run history</h2>
+    <h2>Run history <span class="sub">— every analysis, timestamped; click a row to open that exact report</span></h2>
     <table class="data"><thead><tr>
       <th>When</th><th>Symbol</th><th>Rating</th><th>Change</th><th>Status</th><th>Duration</th>
     </tr></thead><tbody id="sigBody"></tbody></table>
   </section>
+</div>
 </main>
 
 <footer>Research output — not financial advice. Verify before trading.</footer>
@@ -312,6 +351,39 @@ const badge = (rating) => {
 };
 
 let watchlist = [], health = null, currentSymbol = null, currentDays = 180;
+
+/* ---------- page router (hash-based: #/overview, #/portfolio, ...) ---------- */
+const PAGES = ["overview", "portfolio", "watchlist", "schedule", "screener", "history"];
+function route() {
+  const target = location.hash.replace("#/", "") || "overview";
+  const page = PAGES.includes(target) ? target : "overview";
+  PAGES.forEach(p => $(`page-${p}`).classList.toggle("active", p === page));
+  document.querySelectorAll("#nav a").forEach(a =>
+    a.classList.toggle("active", a.getAttribute("href") === `#/${page}`));
+}
+window.addEventListener("hashchange", route);
+
+/* ---------- analysis-in-flight indicator ---------- */
+function setRunning(sym) {
+  localStorage.setItem("runningAnalysis", JSON.stringify({ sym, at: Date.now() }));
+  updateRunningChip();
+}
+function updateRunningChip(latestSignals) {
+  const chip = $("runningChip");
+  const raw = localStorage.getItem("runningAnalysis");
+  if (!raw) { chip.style.display = "none"; return; }
+  const { sym, at } = JSON.parse(raw);
+  const done = latestSignals?.some(s => s.symbol === sym && new Date(s.created_at) > new Date(at));
+  if (done || Date.now() - at > 30 * 60 * 1000) {
+    localStorage.removeItem("runningAnalysis");
+    chip.style.display = "none";
+    if (done) toast(`${sym} analysis finished — see Overview`);
+    return;
+  }
+  const mins = Math.round((Date.now() - at) / 60000);
+  chip.textContent = `⏳ analyzing ${sym} · ${mins}m`;
+  chip.style.display = "inline-flex";
+}
 
 function toast(msg) {
   const t = $("toast"); t.textContent = msg; t.style.display = "block";
@@ -378,7 +450,7 @@ async function loadWatchlist() {
 
   $("wlBody").innerHTML = watchlist.map(t => `
     <tr>
-      <td><b>${esc(t.symbol)}</b></td>
+      <td><b class="linksym" data-open="${esc(t.symbol)}">${esc(t.symbol)}</b></td>
       <td>${esc(t.market.toUpperCase())}</td>
       <td class="tier">${esc(t.tier)}</td>
       <td>${badge(t.last_rating)}</td>
@@ -392,6 +464,8 @@ async function loadWatchlist() {
       </td>
     </tr>`).join("");
   $("wlBody").querySelectorAll("button").forEach(b => b.addEventListener("click", wlAction));
+  document.querySelectorAll(".linksym[data-open]").forEach(el =>
+    el.addEventListener("click", () => { location.hash = "#/overview"; openDetail(el.dataset.open); }));
 }
 async function wlAction(ev) {
   const { act, sym } = ev.target.dataset;
@@ -457,6 +531,7 @@ $("dAnalyze").addEventListener("click", async () => {
   if (!currentSymbol) return;
   try {
     await api(`/runs/ticker/${currentSymbol}`, { method: "POST" });
+    setRunning(currentSymbol);
     toast(`${currentSymbol} analysis started — ~10–15 min; you'll get a Telegram alert if the rating changes`);
   } catch (e) { toast(e.message); }
 });
@@ -747,13 +822,15 @@ async function loadScreener() {
   $("screenerBody").innerHTML = rows.length ? rows.map(r => `
     <tr>
       <td class="tier">${esc(r.run_date)}</td>
-      <td><b>${esc(r.symbol)}</b></td>
+      <td><b class="linksym" data-openscr="${esc(r.symbol)}">${esc(r.symbol)}</b></td>
       <td class="tier">${esc(r.market.toUpperCase())}</td>
       <td class="num"><b>${r.score.toFixed(0)}</b></td>
       <td class="tier">${esc(r.summary)}</td>
       <td>${r.added ? `<span class="changed">✓ watchlist</span>` : ""}</td>
     </tr>`).join("")
     : `<tr><td colspan="6" class="empty">No screener runs yet — it fires each weekday morning, or run it now.</td></tr>`;
+  $("screenerBody").querySelectorAll(".linksym[data-openscr]").forEach(el =>
+    el.addEventListener("click", () => { location.hash = "#/overview"; openDetail(el.dataset.openscr); }));
 }
 $("screenerRun").addEventListener("click", async () => {
   try {
@@ -775,10 +852,12 @@ async function loadSignals() {
       <td>${s.status === "success" ? "✓" : `<span style="color:var(--critical)" title="${esc(s.error ?? "")}">✗ failed</span>`}</td>
       <td class="num tier">${s.duration_seconds ? Math.round(s.duration_seconds / 60) + "m" : ""}</td>
     </tr>`).join("") : `<tr><td colspan="6" class="empty">No runs yet — hit “Run now” on a slot above, or wait for the schedule.</td></tr>`;
+  updateRunningChip(sigs);
   $("sigBody").querySelectorAll("tr.sigrow").forEach(row => row.addEventListener("click", async () => {
     const sym = row.dataset.sym, sid = row.dataset.sid;
     const t = watchlist.find(x => x.symbol === sym);
     currentSymbol = sym;
+    location.hash = "#/overview";
     $("dSymbol").textContent = sym;
     $("dBadge").innerHTML = badge(t?.last_rating);
     $("dMeta").textContent = t ? `${t.market.toUpperCase()} · ${t.tier} coverage · last analyzed ${fmtWhen(t.last_run_at)}` : "";
@@ -793,6 +872,7 @@ async function loadSignals() {
 async function refresh() {
   await Promise.allSettled([loadHealth(), loadWatchlist(), loadSignals(), loadPortfolio(), loadTrades(), loadScreener()]);
 }
+route();
 loadSlots();
 refresh();
 setInterval(refresh, 60000);
