@@ -416,9 +416,12 @@ async function api(path, opts) {
   }
   return res.status === 204 ? null : res.json();
 }
+// API timestamps are UTC but arrive without a timezone marker; parsing them
+// bare would make the browser read them as local time (hours in the future).
+const parseUTC = (iso) => new Date(/Z|[+-]\d{2}:?\d{2}$/.test(iso) ? iso : iso + "Z");
 const fmtWhen = (iso) => {
   if (!iso) return "never";
-  const d = new Date(iso), diff = (Date.now() - d) / 36e5;
+  const d = parseUTC(iso), diff = (Date.now() - d) / 36e5;
   if (diff < 1) return Math.max(1, Math.round(diff * 60)) + "m ago";
   if (diff < 24) return Math.round(diff) + "h ago";
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
@@ -482,7 +485,7 @@ async function loadWatchlist() {
         </select>
       </td>
       <td>${badge(t.last_rating)}</td>
-      <td class="tier">${t.next_review_at ? new Date(t.next_review_at) <= new Date() ? '<span class="changed">due now</span>' : new Date(t.next_review_at).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "—"}</td>
+      <td class="tier">${t.next_review_at ? parseUTC(t.next_review_at) <= new Date() ? '<span class="changed">due now</span>' : parseUTC(t.next_review_at).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "—"}</td>
       <td class="tier">${fmtWhen(t.last_run_at)}</td>
       <td style="text-align:right; white-space:nowrap">
         <button class="btn primary" data-act="analyze" data-sym="${esc(t.symbol)}" title="Run deep analysis now (uses 1 run from the budget)">🤖 analyze</button>
@@ -562,7 +565,7 @@ async function loadReportVersions(sym, openId = null) {
   }
   // One collapsible section per timestamped analysis; bodies lazy-load on expand.
   box.innerHTML = versions.map(v => {
-    const when = new Date(v.created_at).toLocaleString(undefined,
+    const when = parseUTC(v.created_at).toLocaleString(undefined,
       { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
     return `<details class="rpt" data-sid="${v.id}">
       <summary><b>${when}</b> ${badge(v.rating)}

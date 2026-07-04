@@ -34,21 +34,34 @@ _pending_breaches: dict[tuple[int, str], float] = {}  # (position_id, kind) -> f
 _FX_CACHE: dict[str, tuple[float, float]] = {}  # currency -> (rate, fetched_monotonic)
 _FX_TTL_SECONDS = 1800
 
+# Last GOOD price per symbol. yfinance hiccups occasionally; a stale-but-real
+# price beats a blank dashboard and a skipped monitor pass. Fresh fetches
+# always overwrite it, so it only ever bridges gaps.
+_PRICE_CACHE: dict[str, float] = {}
+
 
 def _live_price_sync(symbol: str) -> float | None:
-    """Latest traded price in the instrument's quote currency (real market data)."""
+    """Latest traded price in the instrument's quote currency (real market data).
+
+    Falls back to the last good price on a transient fetch failure so one
+    yfinance hiccup doesn't blank the dashboard or skip a monitor pass.
+    """
     import yfinance as yf
 
     from tradingagents.dataflows.symbol_utils import normalize_symbol
 
     try:
         history = yf.Ticker(normalize_symbol(symbol)).history(period="5d")
-        if history.empty:
-            return None
-        return float(history["Close"].iloc[-1])
+        if not history.empty:
+            price = float(history["Close"].iloc[-1])
+            _PRICE_CACHE[symbol] = price
+            return price
     except Exception:
-        logger.exception("Live price fetch failed for %s", symbol)
-        return None
+        logger.warning("Live price fetch failed for %s", symbol)
+    cached = _PRICE_CACHE.get(symbol)
+    if cached is not None:
+        logger.info("Using last known price for %s: %.4f", symbol, cached)
+    return cached
 
 
 def _usd_rate_sync(currency: str) -> float | None:
