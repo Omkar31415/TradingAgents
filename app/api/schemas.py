@@ -146,14 +146,32 @@ class PositionItem(BaseModel):
     pnl_pct: float | None
 
 
+class BookSummary(BaseModel):
+    label: str                      # strategic | tactical
+    starting_cash_usd: float
+    cash_usd: float
+    equity_usd: float | None
+    return_pct: float | None
+    positions: list[PositionItem]
+    enabled: bool = True            # tactical shows False until a rule is set
+
+
+class EquityPoint(BaseModel):
+    date: str
+    equity_usd: float
+
+
 class PortfolioResponse(BaseModel):
+    books: list[BookSummary]
+    real_positions: list[PositionItem]
+    benchmark_return_pct: float | None  # SPY since the books opened
+    tactical_rule: str                  # "" = disabled (backtest gate not passed)
+    # Backward-compat mirrors of the strategic book (dashboard v1 fields)
     cash_usd: float
     starting_cash_usd: float
     equity_usd: float | None
     return_pct: float | None
-    benchmark_return_pct: float | None  # SPY over the same period
     paper_positions: list[PositionItem]
-    real_positions: list[PositionItem]
 
 
 class AddHoldingRequest(BaseModel):

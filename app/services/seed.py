@@ -74,12 +74,14 @@ async def seed_schedule_if_empty(session: AsyncSession) -> int:
 
 
 async def seed_paper_account_if_missing(session: AsyncSession, starting_cash: float) -> bool:
-    """Create the paper account on first run. Returns True if created."""
+    """Create the paper books on first run. Returns True if any were created."""
     from app.repositories.portfolio import PortfolioRepository
 
     repo = PortfolioRepository(session)
-    if await repo.get_account() is not None:
-        return False
-    await repo.create_account(starting_cash)
-    logger.info("Created paper account with $%.2f virtual cash", starting_cash)
-    return True
+    created = False
+    for label in ("strategic", "tactical"):
+        if await repo.get_account(label) is None:
+            await repo.create_account(starting_cash, label=label)
+            logger.info("Created %s paper book with $%.2f virtual cash", label, starting_cash)
+            created = True
+    return created

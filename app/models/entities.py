@@ -65,18 +65,36 @@ class ScheduleSlot(Base):
 
 
 class PaperAccount(Base):
-    """The virtual-cash account backing the automatic paper portfolio.
+    """A virtual-cash book. Two live side by side:
 
-    Single row. Cash is in USD; positions in other currencies (INR for .NS)
-    are converted at the live FX rate for valuation and sizing.
+    - ``strategic`` — trades LLM signals (positions carry account_type
+      'paper' for backward compatibility)
+    - ``tactical``  — trades the backtest-surviving rule (account_type
+      'tactical')
+
+    Cash is USD; positions in other currencies (INR for .NS) convert at the
+    live FX rate for valuation and sizing.
     """
 
     __tablename__ = "paper_account"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    label: Mapped[str] = mapped_column(String(16), default="strategic")
     starting_cash: Mapped[float] = mapped_column(Float)
     cash: Mapped[float] = mapped_column(Float)
     currency: Mapped[str] = mapped_column(String(8), default="USD")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class EquitySnapshot(Base):
+    """Daily equity per book — the raw material for the scoreboard's curves."""
+
+    __tablename__ = "equity_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    book: Mapped[str] = mapped_column(String(16), index=True)
+    snapshot_date: Mapped[str] = mapped_column(String(10), index=True)  # YYYY-MM-DD UTC
+    equity_usd: Mapped[float] = mapped_column(Float)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 

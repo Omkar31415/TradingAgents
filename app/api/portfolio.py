@@ -73,31 +73,72 @@ async def _benchmark_return_pct(since: datetime) -> float | None:
 
 @router.get("/portfolio", response_model=PortfolioResponse)
 async def portfolio(session: SessionDep) -> PortfolioResponse:
+    from app.api.schemas import BookSummary
+    from app.core.config import get_settings
+    from app.services.paper_broker import BOOK_POSITION_TYPE
+
     repo = PortfolioRepository(session)
-    account = await repo.get_account()
-    if account is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No paper account yet")
     positions = await repo.list_positions()
     items = [await _to_item(p) for p in positions]
-    paper = [i for i in items if i.account_type == "paper"]
     real = [i for i in items if i.account_type == "real"]
 
-    equity = None
-    if all(i.value_usd is not None for i in paper):
-        equity = account.cash + sum(i.value_usd for i in paper)
-    return_pct = (
-        (equity - account.starting_cash) / account.starting_cash * 100
-        if equity is not None else None
-    )
+    settings = get_settings()
+    books: list[BookSummary] = []
+    oldest_created = None
+    for label in ("strategic", "tactical"):
+        account = await repo.get_account(label)
+        if account is None:
+            continue
+        oldest_created = min(filter(None, [oldest_created, account.created_at]))
+        position_type = BOOK_POSITION_TYPE[label]
+        book_positions = [i for i in items if i.account_type == position_type]
+        equity = None
+        if all(i.value_usd is not None for i in book_positions):
+            equity = account.cash + sum(i.value_usd for i in book_positions)
+        return_pct = (
+            (equity - account.starting_cash) / account.starting_cash * 100
+            if equity is not None else None
+        )
+        books.append(BookSummary(
+            label=label,
+            starting_cash_usd=account.starting_cash,
+            cash_usd=account.cash,
+            equity_usd=equity,
+            return_pct=return_pct,
+            positions=book_positions,
+            enabled=(label != "tactical") or bool(settings.tactical_rule.strip()),
+        ))
+    if not books:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No paper books yet")
+
+    strategic = books[0]
     return PortfolioResponse(
-        cash_usd=account.cash,
-        starting_cash_usd=account.starting_cash,
-        equity_usd=equity,
-        return_pct=return_pct,
-        benchmark_return_pct=await _benchmark_return_pct(account.created_at),
-        paper_positions=paper,
+        books=books,
         real_positions=real,
+        benchmark_return_pct=await _benchmark_return_pct(oldest_created),
+        tactical_rule=settings.tactical_rule.strip(),
+        cash_usd=strategic.cash_usd,
+        starting_cash_usd=strategic.starting_cash_usd,
+        equity_usd=strategic.equity_usd,
+        return_pct=strategic.return_pct,
+        paper_positions=strategic.positions,
     )
+
+
+@router.get("/portfolio/history")
+async def portfolio_history(session: SessionDep) -> dict:
+    """Daily equity curves per book, for the scoreboard sparklines."""
+    from app.api.schemas import EquityPoint
+
+    repo = PortfolioRepository(session)
+    out: dict[str, list] = {}
+    for book in ("strategic", "tactical"):
+        snapshots = await repo.list_snapshots(book, limit=120)
+        out[book] = [
+            EquityPoint(date=s.snapshot_date, equity_usd=round(s.equity_usd, 2)).model_dump()
+            for s in snapshots
+        ]
+    return out
 
 
 @router.post("/holdings", response_model=PositionItem, status_code=status.HTTP_201_CREATED)

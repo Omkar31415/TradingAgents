@@ -22,6 +22,7 @@ from app.repositories.schedule import ScheduleRepository
 from app.services.paper_broker import check_stops
 from app.services.pipeline import run_slot
 from app.services.screener import run_screener
+from app.services.tactical.engine import record_equity_snapshots, run_tactical
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,28 @@ def build_scheduler() -> AsyncIOScheduler:
         name="stop-loss monitor",
         coalesce=True,
         max_instances=1,
+    )
+    # Tactical layer: end-of-day rule evaluation (only trades when
+    # TACTICAL_RULE is explicitly set) + daily equity snapshots for the
+    # scoreboard. Neither touches the LLM budget.
+    scheduler.add_job(
+        run_tactical,
+        CronTrigger(day_of_week="mon-fri", hour=15, minute=50,
+                    timezone=pytz.timezone("America/New_York")),
+        id="tactical",
+        name="tactical rule pass",
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=1800,
+    )
+    scheduler.add_job(
+        record_equity_snapshots,
+        CronTrigger(hour=16, minute=15, timezone=pytz.timezone("America/New_York")),
+        id="equity_snapshots",
+        name="equity snapshots",
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=3600,
     )
     # Daily anomaly-screener pass before the US pre-market slot. Pure data
     # APIs — no LLM cost, exempt from the run budget.

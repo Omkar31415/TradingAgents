@@ -103,14 +103,20 @@ async def _position_value_usd(position: Position) -> float | None:
     return position.quantity * price / rate
 
 
-async def paper_equity_usd() -> float | None:
-    """Cash plus live value of all open paper positions."""
+# Book label -> the account_type its positions/trades carry. 'paper' is the
+# legacy value for the strategic book (pre-books data keeps working).
+BOOK_POSITION_TYPE = {"strategic": "paper", "tactical": "tactical"}
+
+
+async def paper_equity_usd(book: str = "strategic") -> float | None:
+    """Cash plus live value of a book's open positions."""
+    position_type = BOOK_POSITION_TYPE[book]
     async with session_factory()() as session:
         repo = PortfolioRepository(session)
-        account = await repo.get_account()
+        account = await repo.get_account(book)
         if account is None:
             return None
-        positions = await repo.list_positions("paper")
+        positions = await repo.list_positions(position_type)
     total = account.cash
     for position in positions:
         value = await _position_value_usd(position)
@@ -196,7 +202,9 @@ async def _paper_buy(
     )
 
 
-async def _paper_sell(symbol: str, rating_or_all: str, reason: str) -> str | None:
+async def _paper_sell(
+    symbol: str, rating_or_all: str, reason: str, book: str = "strategic"
+) -> str | None:
     price = await live_price(symbol)
     if price is None:
         logger.warning("Paper sell skipped for %s: no live price", symbol)
@@ -204,8 +212,8 @@ async def _paper_sell(symbol: str, rating_or_all: str, reason: str) -> str | Non
 
     async with session_factory()() as session, session.begin():
         repo = PortfolioRepository(session)
-        account = await repo.get_account()
-        position = await repo.get_position("paper", symbol)
+        account = await repo.get_account(book)
+        position = await repo.get_position(BOOK_POSITION_TYPE[book], symbol)
         if account is None or position is None:
             return None
         rate = await usd_rate(position.currency)
@@ -224,7 +232,7 @@ async def _paper_sell(symbol: str, rating_or_all: str, reason: str) -> str | Non
         if position.quantity * price / rate < 1.0:  # fully (or effectively) closed
             await repo.remove_position(position)
         await repo.add_trade(Trade(
-            account_type="paper", symbol=symbol, side="sell",
+            account_type=BOOK_POSITION_TYPE[book], symbol=symbol, side="sell",
             quantity=quantity, price=price, currency=position.currency,
             reason=reason, realized_pnl_usd=pnl_usd,
         ))
@@ -337,7 +345,7 @@ async def check_stops() -> list[str]:
         breach = None  # (kind, level)
         if stop and price <= stop:
             breach = ("stop-loss", stop)
-        elif target and account_type == "paper" and price >= target:
+        elif target and account_type in ("paper", "tactical") and price >= target:
             breach = ("target", target)
         if breach is None:
             _pending_breaches.pop((pos_id, "stop-loss"), None)
@@ -352,16 +360,18 @@ async def check_stops() -> list[str]:
             )
             continue
 
-        if account_type == "paper":
+        if account_type in ("paper", "tactical"):
+            book = "strategic" if account_type == "paper" else "tactical"
             reason = f"{kind} {level:,.2f} hit"
-            summary = await _paper_sell(symbol, "all", reason=reason)
+            summary = await _paper_sell(symbol, "all", reason=reason, book=book)
             if summary:
                 events.append(summary)
                 emoji = "🛑" if kind == "stop-loss" else "🎯"
                 await notifier.send_telegram(
-                    f"{emoji} <b>{kind.capitalize()} hit</b> — paper {summary}"
+                    f"{emoji} <b>{kind.capitalize()} hit</b> — {book} {summary}"
                 )
-                await _queue_post_mortem(symbol)
+                if book == "strategic":
+                    await _queue_post_mortem(symbol)
         else:
             async with session_factory()() as session, session.begin():
                 position = await PortfolioRepository(session).get_position_by_id(pos_id)

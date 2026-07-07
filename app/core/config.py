@@ -55,9 +55,20 @@ class AssistantSettings(BaseSettings):
     screener_expiry_days: int = Field(default=21, ge=1)
 
     # --- Paper portfolio ---
-    # Virtual starting cash (USD) for the automatic paper broker. Changing it
-    # later does not reset an existing account.
+    # Virtual starting cash (USD) per book. Changing it later does not reset
+    # existing accounts.
     paper_starting_cash: float = Field(default=10_000.0, gt=0)
+
+    # --- Tactical layer (rule-based, no LLM) ---
+    # DISABLED by default: the shipped 10-year backtest showed every rule in
+    # the library losing to buy-and-hold risk-adjusted on the core universe
+    # (see scripts/backtest_tactical.py). Set TACTICAL_RULE=trend_following
+    # only as a deliberate drawdown-defense choice — it historically halved
+    # drawdowns at the cost of return. Never enabled silently.
+    tactical_rule: str = ""
+    tactical_size_pct: float = Field(default=0.10, gt=0, le=0.25)
+    tactical_max_positions: int = Field(default=8, ge=1, le=20)
+    tactical_daily_loss_cap_pct: float = Field(default=3.0, gt=0)
 
     # --- Watchlist rotation ---
     # After this many consecutive Hold ratings a ticker drops from daily to

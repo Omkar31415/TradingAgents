@@ -41,6 +41,7 @@ def session_factory() -> async_sessionmaker[AsyncSession]:
 _COLUMN_MIGRATIONS = [
     ("watchlist", "category", "VARCHAR(16) DEFAULT 'satellite'"),
     ("watchlist", "next_review_at", "DATETIME"),
+    ("paper_account", "label", "VARCHAR(16) DEFAULT 'strategic'"),
 ]
 
 
