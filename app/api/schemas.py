@@ -95,6 +95,20 @@ class PriceHistory(BaseModel):
     close: list[float]
 
 
+class TickerContextResponse(BaseModel):
+    symbol: str
+    next_earnings_date: str | None
+    days_to_earnings: int | None
+    eps_estimate_avg: float | None
+    revenue_estimate_avg: float | None
+    target_mean: float | None
+    target_median: float | None
+    target_high: float | None
+    target_low: float | None
+    current_price: float | None
+    analyst_upside_pct: float | None
+
+
 class ReportVersionItem(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

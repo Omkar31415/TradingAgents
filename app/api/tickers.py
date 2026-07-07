@@ -9,7 +9,12 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.schemas import PriceHistory, ReportResponse, ReportVersionItem
+from app.api.schemas import (
+    PriceHistory,
+    ReportResponse,
+    ReportVersionItem,
+    TickerContextResponse,
+)
 from app.models.base import get_session
 from app.repositories.signals import SignalRepository
 
@@ -52,6 +57,34 @@ async def price_history(
             detail=f"No price data for {symbol.upper()}",
         )
     return PriceHistory(symbol=symbol.upper(), dates=dates, close=close)
+
+
+@router.get("/{symbol}/context", response_model=TickerContextResponse)
+async def ticker_context(symbol: str) -> TickerContextResponse:
+    """Forward-looking context: next earnings date + analyst consensus."""
+    from app.services.earnings import fetch_earnings_context_sync
+
+    context = await asyncio.to_thread(fetch_earnings_context_sync, symbol)
+    if context is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No earnings/analyst context available for {symbol.upper()}",
+        )
+    return TickerContextResponse(
+        symbol=context.symbol,
+        next_earnings_date=(
+            context.next_earnings_date.isoformat() if context.next_earnings_date else None
+        ),
+        days_to_earnings=context.days_to_earnings,
+        eps_estimate_avg=context.eps_estimate_avg,
+        revenue_estimate_avg=context.revenue_estimate_avg,
+        target_mean=context.target_mean,
+        target_median=context.target_median,
+        target_high=context.target_high,
+        target_low=context.target_low,
+        current_price=context.current_price,
+        analyst_upside_pct=context.analyst_upside_pct,
+    )
 
 
 @router.get("/{symbol}/reports", response_model=list[ReportVersionItem])

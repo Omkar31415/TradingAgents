@@ -27,9 +27,11 @@ logger = logging.getLogger(__name__)
 
 _SLOT_JOB_PREFIX = "slot_"
 _MONITOR_JOB_ID = "stop_monitor"
-# Positions are watched every 5 minutes (the reflex layer guards money at
-# risk; with 2-check confirmation that means ~10 minutes to a reflex action).
-_MONITOR_INTERVAL_MINUTES = 5
+# Positions are repriced every 60 seconds via ONE batched Yahoo request per
+# pass (rate-limit-safe at ~1,440 requests/day regardless of position count).
+# Breaches still need to persist ~3 minutes before the reflex acts — cadence
+# buys reaction speed, the time window keeps the whipsaw filter honest.
+_MONITOR_INTERVAL_SECONDS = 60
 
 
 def parse_hhmm(value: str) -> tuple[int, int]:
@@ -48,7 +50,7 @@ def build_scheduler() -> AsyncIOScheduler:
     scheduler.add_job(
         check_stops,
         "interval",
-        minutes=_MONITOR_INTERVAL_MINUTES,
+        seconds=_MONITOR_INTERVAL_SECONDS,
         id=_MONITOR_JOB_ID,
         name="stop-loss monitor",
         coalesce=True,

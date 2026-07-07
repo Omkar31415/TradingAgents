@@ -28,6 +28,10 @@ class CandidateMetrics:
     market_cap: float | None = None        # USD-ish (as reported)
     watchers: int | None = None            # StockTwits watchlist count (None = unknown)
     insider_net_shares: float | None = None  # net shares bought (buys - sells), 6 months
+    analyst_upside_pct: float | None = None  # (mean target - price) / price * 100
+    dilution_yoy_pct: float | None = None    # shares-outstanding growth, 1 year
+    cash_runway_quarters: float | None = None  # cash / quarterly burn (None = not burning/unknown)
+    insider_cluster: bool = False            # >=2 distinct insiders bought recently (EDGAR)
 
 
 # Attention thresholds (StockTwits watchers). Below LOW is "under-followed";
@@ -80,6 +84,28 @@ def anomaly_score(m: CandidateMetrics) -> float | None:
             score += 10
         elif m.market_cap > MEGA_CAP_USD:
             score -= 10
+    # Analyst consensus — up to 10 pts at >=30% upside to the mean target;
+    # a mean target BELOW the price is the street saying "overextended".
+    if m.analyst_upside_pct is not None:
+        if m.analyst_upside_pct > 0:
+            score += min(m.analyst_upside_pct / 30.0, 1.0) * 10
+        else:
+            score -= 5
+    # Dilution guard (EDGAR share counts) — printing shares erodes whatever
+    # the growth numbers promise; heavy printing is disqualifying territory.
+    if m.dilution_yoy_pct is not None:
+        if m.dilution_yoy_pct > 25:
+            score -= 20
+        elif m.dilution_yoy_pct > 10:
+            score -= 10
+    # Cash runway — a burner with under ~4 quarters of cash almost always
+    # dilutes soon; the raise is the catalyst that kills the trade.
+    if m.cash_runway_quarters is not None and m.cash_runway_quarters < 4:
+        score -= 15
+    # Insider cluster (EDGAR Form 4): several distinct insiders buying
+    # together is a far stronger read than one routine purchase.
+    if m.insider_cluster:
+        score += 8
     return round(score, 1)
 
 
@@ -92,8 +118,16 @@ def describe(m: CandidateMetrics) -> str:
         parts.append(f"earnings {m.earnings_growth * 100:+.0f}%")
     if m.return_3m is not None:
         parts.append(f"3M {m.return_3m * 100:+.0f}%")
-    if m.insider_net_shares is not None and m.insider_net_shares > 0:
+    if m.insider_cluster:
+        parts.append("insider cluster buy")
+    elif m.insider_net_shares is not None and m.insider_net_shares > 0:
         parts.append("insiders buying")
+    if m.analyst_upside_pct is not None and abs(m.analyst_upside_pct) >= 5:
+        parts.append(f"analysts see {m.analyst_upside_pct:+.0f}%")
+    if m.dilution_yoy_pct is not None and m.dilution_yoy_pct > 10:
+        parts.append(f"⚠ dilution +{m.dilution_yoy_pct:.0f}%/yr")
+    if m.cash_runway_quarters is not None and m.cash_runway_quarters < 4:
+        parts.append(f"⚠ {m.cash_runway_quarters:.0f}q cash left")
     if m.watchers is not None:
         if m.watchers < ATTENTION_LOW:
             parts.append(f"only {m.watchers:,} watchers")

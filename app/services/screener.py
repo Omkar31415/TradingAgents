@@ -156,6 +156,13 @@ def _enrich_sync(symbol: str) -> CandidateMetrics:
     except Exception:
         pass
 
+    # Analyst upside straight from .info — no extra request needed.
+    upside = None
+    target_mean = info.get("targetMeanPrice")
+    price = info.get("currentPrice") or info.get("regularMarketPrice")
+    if target_mean and price:
+        upside = (target_mean - price) / price * 100
+
     return CandidateMetrics(
         symbol=symbol.upper(),
         market=infer_market(symbol).value,
@@ -167,6 +174,7 @@ def _enrich_sync(symbol: str) -> CandidateMetrics:
         market_cap=info.get("marketCap"),
         watchers=_watchers_sync(symbol) if infer_market(symbol) is Market.US else None,
         insider_net_shares=_insider_net_shares_sync(ticker),
+        analyst_upside_pct=upside,
     )
 
 
@@ -207,6 +215,42 @@ async def expire_stale_picks() -> list[str]:
     return removed
 
 
+async def _edgar_refine(
+    scored: list[tuple[float, CandidateMetrics]], top_n: int
+) -> list[tuple[float, CandidateMetrics]]:
+    """Enrich the top US candidates with EDGAR dilution + insider data, re-rank."""
+    from dataclasses import replace
+
+    from app.services.edgar import fetch_dilution_sync, fetch_insider_activity_sync
+
+    refined: list[tuple[float, CandidateMetrics]] = []
+    for rank, (score, metrics) in enumerate(scored):
+        if rank >= top_n or metrics.market != Market.US.value:
+            refined.append((score, metrics))
+            continue
+        try:
+            dilution = await asyncio.to_thread(fetch_dilution_sync, metrics.symbol)
+            insider = await asyncio.to_thread(fetch_insider_activity_sync, metrics.symbol)
+        except Exception:
+            logger.warning("EDGAR refinement failed for %s", metrics.symbol)
+            refined.append((score, metrics))
+            continue
+        updated = replace(
+            metrics,
+            dilution_yoy_pct=dilution.shares_yoy_pct if dilution else None,
+            cash_runway_quarters=dilution.runway_quarters if dilution else None,
+            insider_cluster=bool(insider and insider.cluster_buy),
+            insider_net_shares=(
+                insider.net_shares if insider and insider.filings_parsed > 0
+                else metrics.insider_net_shares
+            ),
+        )
+        new_score = anomaly_score(updated)
+        refined.append((new_score if new_score is not None else score, updated))
+    refined.sort(key=lambda pair: pair[0], reverse=True)
+    return refined
+
+
 async def run_screener() -> list[dict]:
     """One full screener pass. Returns scored results (dicts for the API/UI)."""
     settings = get_settings()
@@ -238,6 +282,12 @@ async def run_screener() -> list[dict]:
         if score is not None:
             scored.append((score, metrics))
     scored.sort(key=lambda pair: pair[0], reverse=True)
+
+    # Second pass: primary-source EDGAR refinement (dilution guard + insider
+    # clusters) for the top US candidates only — each costs a few throttled
+    # SEC requests, so the long tail isn't worth it. Scores are then re-ranked
+    # before any watchlist adds happen.
+    scored = await _edgar_refine(scored, top_n=12)
 
     capacity = max(0, settings.screener_satellite_cap - satellite_count)
     budget = min(settings.screener_max_adds, capacity)

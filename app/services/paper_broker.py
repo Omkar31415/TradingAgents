@@ -25,11 +25,13 @@ from app.services.volatility import daily_volatility_pct_sync, default_stop_pct
 
 logger = logging.getLogger(__name__)
 
-# Reflex confirmation: a stop/target breach must hold across two consecutive
-# monitor passes before acting, so one bad print can't trigger a sale.
-# In-memory is intentional — a restart just means re-confirming, which is the
-# conservative direction.
+# Reflex confirmation: a stop/target breach must PERSIST for a minimum window
+# before acting, so one bad print can't trigger a sale. Time-based (not
+# check-count-based) so the monitor cadence can change without weakening the
+# whipsaw filter. In-memory is intentional — a restart just means
+# re-confirming, which is the conservative direction.
 _pending_breaches: dict[tuple[int, str], float] = {}  # (position_id, kind) -> first_seen_ts
+_BREACH_CONFIRM_SECONDS = 180
 
 _FX_CACHE: dict[str, tuple[float, float]] = {}  # currency -> (rate, fetched_monotonic)
 _FX_TTL_SECONDS = 1800
@@ -245,13 +247,56 @@ async def _queue_post_mortem(symbol: str) -> None:
 
 
 def _confirmed(pos_id: int, kind: str) -> bool:
-    """True on the second consecutive breach sighting (whipsaw filter)."""
+    """True once a breach has persisted for the confirmation window."""
     key = (pos_id, kind)
-    if key in _pending_breaches:
+    first_seen = _pending_breaches.get(key)
+    if first_seen is None:
+        _pending_breaches[key] = time.monotonic()
+        return False
+    if time.monotonic() - first_seen >= _BREACH_CONFIRM_SECONDS:
         del _pending_breaches[key]
         return True
-    _pending_breaches[key] = time.monotonic()
     return False
+
+
+def _batch_prices_sync(symbols: list[str]) -> dict[str, float]:
+    """Latest prices for many symbols in ONE Yahoo request.
+
+    This is what makes a fast monitor cadence rate-limit-safe: N positions
+    cost one HTTP call per pass instead of N. Failures fall back to the
+    per-symbol last-known-price cache.
+    """
+    import yfinance as yf
+
+    from tradingagents.dataflows.symbol_utils import normalize_symbol
+
+    if not symbols:
+        return {}
+    mapping = {normalize_symbol(s): s for s in symbols}
+    prices: dict[str, float] = {}
+    try:
+        data = yf.download(
+            list(mapping), period="1d", interval="1m",
+            progress=False, group_by="ticker", threads=False,
+        )
+        for yahoo_symbol, original in mapping.items():
+            try:
+                closes = (
+                    data[yahoo_symbol]["Close"] if len(mapping) > 1 else data["Close"]
+                )
+                closes = closes.dropna()
+                if not closes.empty:
+                    price = float(closes.iloc[-1])
+                    prices[original] = price
+                    _PRICE_CACHE[original] = price
+            except (KeyError, TypeError, IndexError):
+                continue
+    except Exception:
+        logger.warning("Batched price fetch failed for %d symbols", len(symbols))
+    for symbol in symbols:
+        if symbol not in prices and symbol in _PRICE_CACHE:
+            prices[symbol] = _PRICE_CACHE[symbol]
+    return prices
 
 
 async def check_stops() -> list[str]:
@@ -274,13 +319,18 @@ async def check_stops() -> list[str]:
             for p in positions
         ]
 
+    # One batched request reprices every open position per pass.
+    prices = await asyncio.to_thread(
+        _batch_prices_sync, sorted({s[2] for s in snapshot})
+    )
+
     live_ids = set()
     notifier = Notifier(get_settings())
     for pos_id, account_type, symbol, stop, target in snapshot:
         live_ids.add(pos_id)
         if not stop and not target:
             continue
-        price = await live_price(symbol)
+        price = prices.get(symbol)
         if price is None:
             continue
 

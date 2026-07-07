@@ -378,9 +378,31 @@ async def _persist_outcome(market, symbol, prev_rating, outcome) -> dict:
                     ticker.tier = new_tier.value
                     ticker.consecutive_holds = holds
                 ticker.last_rating = outcome.rating
-                # The analysis names its own next check-up date (clamped 3-21d).
+                # The analysis names its own next check-up date (clamped 3-21d),
+                # then earnings pull it forward: never review AFTER a report
+                # that lands first.
                 review_days = parse_review_days(outcome.decision_text)
-                ticker.next_review_at = now + timedelta(days=review_days)
+                review_at = (now + timedelta(days=review_days)).replace(tzinfo=None)
+                try:
+                    from app.services.earnings import (
+                        clamp_review_to_earnings,
+                        fetch_earnings_context_sync,
+                    )
+
+                    context = await asyncio.to_thread(fetch_earnings_context_sync, symbol)
+                    if context is not None:
+                        clamped = clamp_review_to_earnings(
+                            review_at, now.replace(tzinfo=None), context.next_earnings_date
+                        )
+                        if clamped != review_at:
+                            logger.info(
+                                "Review for %s pulled forward to %s (earnings %s)",
+                                symbol, clamped.date(), context.next_earnings_date,
+                            )
+                        review_at = clamped
+                except Exception:
+                    logger.warning("Earnings clamp failed for %s", symbol)
+                ticker.next_review_at = review_at
 
     return {
         "symbol": symbol,
