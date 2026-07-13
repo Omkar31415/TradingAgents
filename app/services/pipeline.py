@@ -49,6 +49,22 @@ MARKET_TZ = {
 # max_instances=1.
 _run_lock = asyncio.Lock()
 
+# What the deep-analysis engine is chewing on right now (None = idle).
+# Surfaced via /health so the dashboard can show scheduled runs, not just
+# manual clicks.
+current_analysis: dict | None = None
+
+# When several reviews are due at once, spend the budget in order of how
+# actionable the ticker's last verdict was: open positions are handled by a
+# higher queue tier already; below that, Buy/Overweight-rated tickers first
+# (closest to action), then Hold (could flip), then Underweight, then Sell
+# (already rejected), never-analyzed last within their tier.
+_RATING_PRIORITY = {"Buy": 0, "Overweight": 1, "Hold": 2, "Underweight": 3, "Sell": 4}
+
+
+def review_priority(last_rating: str | None) -> int:
+    return _RATING_PRIORITY.get(last_rating, 5)
+
 
 @dataclass(frozen=True)
 class TickerItem:
@@ -147,9 +163,17 @@ async def _select_candidates(market: Market | None, batch_size: int) -> list:
            and _naive(t.next_review_at) <= now]
     never_run = [t for t in rows if t.last_run_at is None]
 
-    p1_position_due = [t for t in due if t.symbol in held]
+    def _staleness(t):
+        return _naive(t.last_run_at) or datetime.min
+
+    p1_position_due = sorted(
+        (t for t in due if t.symbol in held), key=_staleness
+    )
     p2_initiations = [t for t in never_run if t.added_by == "screener"]
-    p3_reviews = [t for t in due if t.symbol not in held]
+    p3_reviews = sorted(
+        (t for t in due if t.symbol not in held),
+        key=lambda t: (review_priority(t.last_rating), _staleness(t)),
+    )
 
     picked: list = []
     seen: set[str] = set()
@@ -266,14 +290,23 @@ async def _run_batch(label: str, items: list[TickerItem]) -> list[dict]:
         run_id_var.set(f"{label.replace(' ', '-')}-{uuid4().hex[:8]}")
         logger.info("Batch started: %r, %d ticker(s)", label, len(items))
 
+        global current_analysis
         digest_rows: list[dict] = []
         batch_date = ""
         for item in items:
             trade_date = datetime.now(MARKET_TZ[item.market]).date().isoformat()
             batch_date = batch_date or trade_date
-            outcome = await asyncio.to_thread(
-                run_analysis_sync, item.symbol, trade_date, item.asset_type, settings
-            )
+            current_analysis = {
+                "symbol": item.symbol,
+                "label": label,
+                "started_at": datetime.now(pytz.utc).isoformat(),
+            }
+            try:
+                outcome = await asyncio.to_thread(
+                    run_analysis_sync, item.symbol, trade_date, item.asset_type, settings
+                )
+            finally:
+                current_analysis = None
             row = await _persist_outcome(item.market, item.symbol, item.prev_rating, outcome)
             digest_rows.append(row)
 

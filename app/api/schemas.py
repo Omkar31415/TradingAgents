@@ -224,3 +224,4 @@ class HealthResponse(BaseModel):
     daily_run_budget: int
     runs_this_week: int
     weekly_run_budget: int
+    analyzing: dict | None = None  # {symbol, label, started_at} while a deep run is live

@@ -117,6 +117,7 @@ async def health() -> HealthResponse:
         }
         for job in scheduler.get_jobs()
     ]
+    import app.services.pipeline as _pipeline
     from app.models.base import session_factory as _sf
     from app.repositories.signals import SignalRepository as _SigRepo
     from app.services.pipeline import _utc_midnight, _utc_week_start
@@ -138,4 +139,5 @@ async def health() -> HealthResponse:
         daily_run_budget=settings.assistant_daily_run_budget,
         runs_this_week=used_week,
         weekly_run_budget=settings.assistant_weekly_run_budget,
+        analyzing=_pipeline.current_analysis,
     )

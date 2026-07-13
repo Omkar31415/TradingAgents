@@ -396,6 +396,14 @@ function setRunning(sym) {
 }
 function updateRunningChip(latestSignals) {
   const chip = $("runningChip");
+  // Server truth first: shows SCHEDULED runs too, not just manual clicks.
+  if (health?.analyzing?.symbol) {
+    const mins = Math.max(0, Math.round((Date.now() - parseUTC(health.analyzing.started_at)) / 60000));
+    chip.textContent = `🔬 analyzing ${health.analyzing.symbol} · ${mins}m (${health.analyzing.label})`;
+    chip.title = "A deep analysis is running right now — scheduled runs show here too";
+    chip.style.display = "inline-flex";
+    return;
+  }
   const raw = localStorage.getItem("runningAnalysis");
   if (!raw) { chip.style.display = "none"; return; }
   const { sym, at } = JSON.parse(raw);
@@ -458,6 +466,7 @@ async function loadHealth() {
       `Budgets: ${health.daily_run_budget}/day · ${health.weekly_run_budget}/week (used: ${health.runs_today} today, ${health.runs_this_week} this week). ` +
       `Slots fund a priority queue — position reviews first, then screener initiations, due reviews, big movers; a quiet day costs nothing.`;
     $("updatedAt").textContent = new Date().toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+    updateRunningChip();
   } catch (e) { $("schedState").textContent = "unreachable"; }
 }
 

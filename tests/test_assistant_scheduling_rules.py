@@ -38,6 +38,19 @@ class TestCategorySizing:
         assert unknown == pytest.approx(5.0)
 
 
+class TestReviewPriority:
+    def test_actionability_order(self):
+        from app.services.pipeline import review_priority
+
+        order = ["Buy", "Overweight", "Hold", "Underweight", "Sell", None]
+        priorities = [review_priority(r) for r in order]
+        assert priorities == sorted(priorities), "priority must decrease down the rating scale"
+        assert review_priority("Buy") < review_priority("Hold")
+        assert review_priority("Hold") < review_priority("Underweight")
+        assert review_priority("Underweight") < review_priority("Sell")
+        assert review_priority(None) > review_priority("Sell")
+
+
 class TestVolatilityScaling:
     def test_stable_megacap_gets_floor_stop(self):
         # MSFT-like: ~0.9% daily -> 2.25% raw -> floored at 5%
